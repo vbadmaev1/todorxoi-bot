@@ -205,15 +205,25 @@ async def main():
     suffix, src_s = _translit_token("һазр-ән")
     check(src_s == "model" and suffix == "γazar-bēn",
           f"суффикс через дефис НЕ разобран: һазр-ән -> {suffix}")
-    whole, src_w = _translit_token("моңһл-күрә")
-    check(src_w == "dict", f"словарная пара берётся целиком: моңһл-күрә -> {whole}")
+    plain, src_p = _translit_token("хальмг")
+    check(src_p == "dict", f"обычное слово берётся из словаря: хальмг -> {plain}")
 
-    from core.translit_todo import translit_to_todo
+    from core.translit_todo import todo_to_translit, translit_to_todo
 
     check(" " not in translit_to_todo(compound),
           "в составном слове широкий пробел, а не узкий неразрывный")
     check(" " in translit_to_todo(suffix),
           "у суффикса, наоборот, узкий неразрывный пробел")
+
+    print("\n4a2. Правило či -> ᡔᡅ")
+    check(translit_to_todo("či") == "\u1854\u1845",
+          "č перед краткой i пишется через ᡔ (U+1854)")
+    check("\u1854" in translit_to_todo("arčīxu"),
+          "č перед долгой ī — тоже через ᡔ")
+    check("\u1852" in translit_to_todo("čōno") and "\u1854" not in translit_to_todo("čōno"),
+          "перед другими гласными č остаётся ᡒ (U+1852)")
+    check(todo_to_translit(translit_to_todo("abči")) == "abči",
+          "обратно ᡔᡅ разворачивается в či")
 
     print("\n4b. Настройки картинки")
     await dp.feed_update(bot, msg("/settings"))
