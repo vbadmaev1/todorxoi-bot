@@ -199,21 +199,34 @@ async def main():
     print("\n4a. Дефис: составное слово vs суффикс")
     from core.transliterate import _translit_token
 
-    compound, src_c = _translit_token("көвүн-күүкн")
-    check(src_c == "split" and " " in compound,
-          f"составное слово разобрано по частям: көвүн-күүкн -> {compound}")
+    for word in ("келн-мелн", "көвүн-күүкн", "эк-эцк"):
+        got, src = _translit_token(word)
+        check(src == "split" and " " in got,
+              f"составное слово разобрано по частям: {word} -> {got}")
+    # «мелн» — эхо-слово, в словаре его нет: часть должна уйти в модель,
+    # а не тянуть за собой весь токен
+    check(_translit_token("келн-мелн")[0].split()[1] not in ("", "мелн"),
+          "незнакомая часть составного слова переведена моделью")
     suffix, src_s = _translit_token("һазр-ән")
-    check(src_s == "model" and suffix == "γazar-bēn",
-          f"суффикс через дефис НЕ разобран: һазр-ән -> {suffix}")
+    check(src_s == "model",
+          f"короткий суффикс через дефис НЕ разобран: һазр-ән -> {suffix}")
     plain, src_p = _translit_token("хальмг")
     check(src_p == "dict", f"обычное слово берётся из словаря: хальмг -> {plain}")
 
     from core.translit_todo import todo_to_translit, translit_to_todo
 
-    check(" " not in translit_to_todo(compound),
+    check("\u202f" not in translit_to_todo(_translit_token("келн-мелн")[0]),
           "в составном слове широкий пробел, а не узкий неразрывный")
-    check(" " in translit_to_todo(suffix),
+    check("\u202f" in translit_to_todo("γazar-yēn"),
           "у суффикса, наоборот, узкий неразрывный пробел")
+
+    print("\n4a1. x/k не склеиваются с соседней буквой в диграф")
+    check(translit_to_todo("bolxu") == "\u184b\u1846\u182f\u184d\u1847",
+          f"bolxu -> {translit_to_todo('bolxu')} (ждём ᡋᡆᠯᡍᡇ, а не ᡋᡆᡀᡇ)")
+    check("\u1840" not in translit_to_todo("ādoulxu"),
+          "ᡀ (lh) больше не возникает там, где её нет")
+    check("\u1857" not in translit_to_todo("angxāraq"),
+          "ᡗ (gh) больше не возникает там, где её нет")
 
     print("\n4a2. Правило či -> ᡔᡅ")
     check(translit_to_todo("či") == "\u1854\u1845",
