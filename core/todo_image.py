@@ -375,6 +375,27 @@ def render_todo_image(text, out_path=None, **kwargs):
 
 MAX_SIDE = 2600  # у Telegram сумма сторон фото ограничена, да и смысла нет
 
+# К чему стремимся по большей стороне. Шрифт векторный, «разрешения» у него
+# нет — сколько пикселей попросим, столько и нарисует. Но кегль задаёт ещё и
+# перенос по столбцам, поэтому просто поднять его нельзя: изменится вёрстка.
+# Поэтому кегль и высоту столбца умножаем на один и тот же множитель —
+# картинка та же, только плотнее. Без этого одно слово давало 133x215, и на
+# экране, где его растягивают, была видна лестница по краям букв.
+TARGET_MIN_SIDE = 1200
+MAX_SCALE = 6  # выше смысла нет: упрёмся в MAX_SIDE
+
+
+def _quality_scale(size):
+    """Во сколько раз перерисовать, чтобы картинка перестала быть мелкой.
+
+    Множитель дробный намеренно: при округлении вниз до целого картинки
+    размером от 600 до 1200 px не получали ничего (1200/654 -> 1), то есть
+    ровно средние случаи оставались мелкими."""
+    longest = max(size)
+    if longest >= TARGET_MIN_SIDE:
+        return 1.0
+    return min(MAX_SCALE, TARGET_MIN_SIDE / longest)
+
 
 def render_todo_bytes(todo_text, max_side=MAX_SIDE, **kwargs):
     """Готовый текст тодо бичиг -> PNG в памяти (io.BytesIO).
@@ -387,6 +408,21 @@ def render_todo_bytes(todo_text, max_side=MAX_SIDE, **kwargs):
     Слишком большая картинка ужимается по большей стороне."""
     img = render_todo_paragraph(todo_text, out_path=None, **kwargs)
     color_fallback = getattr(img, "color_fallback", False)
+
+    # мелкую картинку перерисовываем крупнее — именно перерисовываем, а не
+    # растягиваем: растягивание добавит размытия, но не деталей
+    scale = _quality_scale(img.size)
+    if scale > 1.01:
+        # все три величины умножаем на один множитель — вёрстка остаётся
+        # прежней до пикселя, меняется только плотность
+        img = render_todo_paragraph(
+            todo_text, out_path=None,
+            **{**kwargs,
+               "font_size": round(kwargs.get("font_size", 64) * scale),
+               "max_column_height": round(kwargs.get("max_column_height", 900) * scale),
+               "margin": round(kwargs.get("margin", 36) * scale)},
+        )
+
     if max_side and max(img.size) > max_side:
         scale = max_side / max(img.size)
         img = img.resize(

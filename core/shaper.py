@@ -100,12 +100,20 @@ def _glyph_bitmap(font_path: str, size: int, gid: int):
     bmp = slot.bitmap
     if bmp.width == 0 or bmp.rows == 0:
         return None, slot.bitmap_left, slot.bitmap_top
-    # buffer идёт построчно с шагом pitch, он может быть больше width
-    rows = [
-        bytes(bmp.buffer[r * bmp.pitch : r * bmp.pitch + bmp.width])
-        for r in range(bmp.rows)
-    ]
-    img = Image.frombytes("L", (bmp.width, bmp.rows), b"".join(rows))
+
+    # ВАЖНО: bmp.buffer в freetype-py — property, которая каждый раз
+    # собирает новый python-список на rows*pitch элементов. Если трогать
+    # её внутри цикла по строкам, получается квадратичная работа: на
+    # мелком кегле незаметно, на крупном один глиф считается секундами.
+    # Поэтому забираем буфер ровно один раз.
+    data = bytes(bmp.buffer)
+    pitch = abs(bmp.pitch)
+    if pitch != bmp.width:
+        # строки с выравниванием — вырезаем полезную часть каждой
+        data = b"".join(
+            data[r * pitch: r * pitch + bmp.width] for r in range(bmp.rows)
+        )
+    img = Image.frombytes("L", (bmp.width, bmp.rows), data)
     return img, slot.bitmap_left, slot.bitmap_top
 
 
