@@ -27,6 +27,7 @@ CB_CONVERT = "conv"
 CB_SETTINGS = "set"
 
 SIZE_LABELS = {"small": "мелкий", "medium": "средний", "large": "крупный"}
+FONT_LABELS = {"universal": "классический", "clear": "Clear Script"}
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -101,6 +102,12 @@ def settings_menu(opts) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    text=f"✒️ Шрифт: {FONT_LABELS.get(opts.font, opts.font)}",
+                    callback_data=f"{CB_SETTINGS}:pick:font",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="↩︎ Сбросить всё", callback_data=f"{CB_SETTINGS}:reset:-"
                 )
             ],
@@ -136,6 +143,22 @@ def size_picker(current: str) -> InlineKeyboardMarkup:
             callback_data=f"{CB_SETTINGS}:set:size:{key}",
         )
         for key, label in SIZE_LABELS.items()
+    ]
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            buttons,
+            [InlineKeyboardButton(text="‹ Назад", callback_data=f"{CB_SETTINGS}:back:-")],
+        ]
+    )
+
+
+def font_picker(current: str) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(
+            text=label + (" ✓" if key == current else ""),
+            callback_data=f"{CB_SETTINGS}:set:font:{key}",
+        )
+        for key, label in FONT_LABELS.items()
     ]
     return InlineKeyboardMarkup(
         inline_keyboard=[

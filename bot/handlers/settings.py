@@ -24,7 +24,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from core import DEFAULT_FONT_SIZE, FONT_SIZES, ImageOptions
+from core import FONT_SIZES, FONTS, ImageOptions
 from core.todo_image import color_label
 
 from .. import keyboards, texts
@@ -47,6 +47,8 @@ async def load_options(storage: Storage, user_id: int) -> ImageOptions:
         opts.bg = saved["bg"]
     if saved.get("size") in FONT_SIZES:
         opts.size = saved["size"]
+    if saved.get("font") in FONTS:
+        opts.font = saved["font"]
     return opts
 
 
@@ -55,6 +57,7 @@ def _describe(opts: ImageOptions) -> str:
         fg=color_label(opts.fg),
         bg=color_label(opts.bg),
         size=keyboards.SIZE_LABELS.get(opts.size, opts.size),
+        font=keyboards.FONT_LABELS.get(opts.font, opts.font),
     )
 
 
@@ -83,6 +86,8 @@ async def on_settings(callback: CallbackQuery, storage: Storage) -> None:
         field = parts[2]
         if field == "size":
             markup = keyboards.size_picker(opts.size)
+        elif field == "font":
+            markup = keyboards.font_picker(opts.font)
         else:
             markup = keyboards.color_picker(field, getattr(opts, field))
         await callback.answer()
@@ -91,9 +96,9 @@ async def on_settings(callback: CallbackQuery, storage: Storage) -> None:
 
     if action == "set":
         field, value = parts[2], parts[3]
-        ok = (field in ("fg", "bg") and value in _VALID_COLORS) or (
-            field == "size" and value in FONT_SIZES
-        )
+        ok = ((field in ("fg", "bg") and value in _VALID_COLORS)
+              or (field == "size" and value in FONT_SIZES)
+              or (field == "font" and value in FONTS))
         if not ok:
             await callback.answer()
             return

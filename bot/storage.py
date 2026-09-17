@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
     fg         TEXT,
     bg         TEXT,
     size       TEXT,
+    font       TEXT,
     updated_at TEXT NOT NULL
 );
 
@@ -93,6 +94,9 @@ class Storage:
 
     # ---------------------------------------------------------------- setup
 
+    # старые базы заводились без колонки font — добавляем на лету
+    _MIGRATIONS = ("ALTER TABLE user_settings ADD COLUMN font TEXT",)
+
     def connect(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.jsonl_path.parent.mkdir(parents=True, exist_ok=True)
@@ -100,6 +104,11 @@ class Storage:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        for sql in self._MIGRATIONS:
+            try:
+                self._conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # колонка уже есть — обычное дело
         self._conn.commit()
         log.info("БД готова: %s", self.db_path)
 
@@ -190,16 +199,16 @@ class Storage:
     def _get_settings(self, user_id: int) -> dict:
         with self._lock:
             row = self._conn.execute(
-                "SELECT fg, bg, size FROM user_settings WHERE user_id = ?",
+                "SELECT fg, bg, size, font FROM user_settings WHERE user_id = ?",
                 (user_id,),
             ).fetchone()
         if not row:
             return {}
         # None-поля не отдаём: пусть сработает значение по умолчанию
-        return {k: row[k] for k in ("fg", "bg", "size") if row[k]}
+        return {k: row[k] for k in ("fg", "bg", "size", "font") if row[k]}
 
     def _set_setting(self, user_id: int, field: str, value: str) -> None:
-        if field not in ("fg", "bg", "size"):
+        if field not in ("fg", "bg", "size", "font"):
             raise ValueError(f"неизвестная настройка: {field}")
         with self._lock:
             self._conn.execute(

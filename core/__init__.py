@@ -6,8 +6,10 @@
 """
 
 from .pipeline import (  # noqa: F401
+    DEFAULT_FONT,
     DEFAULT_FONT_SIZE,
     FONT_SIZES,
+    FONTS,
     MAX_INPUT_CHARS,
     SCRIPT_TITLES,
     TARGET_IMAGE,
@@ -29,7 +31,9 @@ __all__ = [
     "Result",
     "ImageOptions",
     "FONT_SIZES",
+    "FONTS",
     "DEFAULT_FONT_SIZE",
+    "DEFAULT_FONT",
     "PipelineError",
     "TARGET_TRANSLIT",
     "TARGET_TODO",

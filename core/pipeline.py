@@ -36,6 +36,15 @@ MAX_INPUT_CHARS = 1000
 FONT_SIZES = {"small": 44, "medium": 64, "large": 96}
 DEFAULT_FONT_SIZE = "medium"
 
+# Два шрифта, два разных способа рисовать одно и то же.
+#   universal — MongolianUniversalWhite: настоящий юникод тодо бичиг, формы
+#               букв выбирает HarfBuzz, знаки препинания на месте;
+#   clear     — Clear Script: рисует по особой кириллической записи, которую
+#               строят статистические правила; знаков препинания в шрифте
+#               нет. Подробности — в core/clear_script.py.
+FONTS = ("universal", "clear")
+DEFAULT_FONT = "universal"
+
 
 @dataclass
 class ImageOptions:
@@ -45,6 +54,7 @@ class ImageOptions:
     fg: str = "black"
     bg: str = "white"
     size: str = DEFAULT_FONT_SIZE
+    font: str = DEFAULT_FONT
 
     @property
     def font_size(self) -> int:
@@ -56,8 +66,15 @@ class ImageOptions:
         # перенос: на строку влезает слишком мало букв
         return int(os.environ.get("MAX_COLUMN_HEIGHT", "900")) * self.font_size // 64
 
+    @property
+    def font_path(self):
+        from .clear_script import FONT_PATH as CLEAR_FONT
+        from .todo_image import DEFAULT_TODO_FONT
+
+        return str(CLEAR_FONT) if self.font == "clear" else DEFAULT_TODO_FONT
+
     def as_dict(self) -> dict:
-        return {"fg": self.fg, "bg": self.bg, "size": self.size}
+        return {"fg": self.fg, "bg": self.bg, "size": self.size, "font": self.font}
 
 
 class PipelineError(Exception):
@@ -186,13 +203,30 @@ def process(text: str, target: str, options: Optional[ImageOptions] = None) -> R
             t0 = time.perf_counter()
             res.todo = translit_to_todo(res.translit)
             res.steps_ms["translit→тодо"] = (time.perf_counter() - t0) * 1000
+        # Что именно уедет в шрифт, зависит от выбранного шрифта:
+        #   universal — юникод тодо бичиг плюс знаки препинания;
+        #   clear     — особая кириллическая запись, знаков препинания в
+        #               этом шрифте нет вовсе, поэтому и не ставим.
+        t0 = time.perf_counter()
+        if opts.font == "clear":
+            from .clear_script import translit_to_font
+
+            source = res.translit or todo_to_translit(res.todo)
+            render_text = translit_to_font(source)
+        else:
+            from .punctuation import add_punctuation
+
+            render_text = add_punctuation(res.todo)
+        res.steps_ms["знаки"] = (time.perf_counter() - t0) * 1000
+
         t0 = time.perf_counter()
         res.image, res.image_size, meta = render_todo_bytes(
-            res.todo,
+            render_text,
             font_size=opts.font_size,
             max_column_height=opts.max_column_height,
             fg=opts.fg,
             bg=opts.bg,
+            font_path=opts.font_path,
         )
         res.transparent = meta["transparent"]
         res.color_fallback = meta["color_fallback"]

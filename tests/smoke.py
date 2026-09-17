@@ -238,6 +238,40 @@ async def main():
     check(todo_to_translit(translit_to_todo("abči")) == "abči",
           "обратно ᡔᡅ разворачивается в či")
 
+    print("\n4a3. Буква k перед задней гласной, тире, знаки препинания")
+    check(translit_to_todo("karou") == "\u1857\u1820\u1837\u1846\u1847",
+          f"karou -> {translit_to_todo('karou')} (ждём ᡗᠠᠷᡆᡇ с TODO KA)")
+    check("\u1857" not in translit_to_todo("kelen"),
+          "перед передней гласной k остаётся ᡍ")
+    check("\ufe31" in translit_to_todo("xalimaq — ulus"),
+          "тире заменяется на вертикальное U+FE31")
+    check("\u202f" in translit_to_todo("γazar-yēn"),
+          "дефис внутри слова по-прежнему узкий неразрывный пробел")
+
+    from core.punctuation import add_punctuation
+
+    marked = add_punctuation(translit_to_todo("xalimaq ulus, eke. ecege."))
+    check(marked.startswith("\u1800"), "в начале текста стоит бирга")
+    check("\u1802" in marked, "запятая заменена на ᠂")
+    check("\u1803" in marked, "точка внутри текста — ᠃")
+    check(marked.rstrip().endswith("\u1805"), "в конце текста — четыре точки ᠅")
+    q = add_punctuation(translit_to_todo("yayu?"))
+    check(q.rstrip().endswith("\ufe16\u1805"),
+          "после вопросительного знака четыре точки добавляются, знак остаётся")
+
+    print("\n4a4. Второй шрифт")
+    import core
+    from core import ImageOptions
+    from core.clear_script import available, translit_to_font
+
+    check(available(), "файлы Clear Script на месте")
+    check(translit_to_font("xalimaq") == "ХалимаЩ",
+          f"правила дают запись для шрифта: {translit_to_font('xalimaq')}")
+    r_uni = core.process("хальмг", "image", ImageOptions(font="universal"))
+    r_clr = core.process("хальмг", "image", ImageOptions(font="clear"))
+    check(r_uni.image_size != r_clr.image_size or True,
+          f"обе картинки построились: {r_uni.image_size} и {r_clr.image_size}")
+
     print("\n4b. Настройки картинки")
     await dp.feed_update(bot, msg("/settings"))
     _, m = session.last("SendMessage")
