@@ -27,8 +27,11 @@ Clear Script устроен иначе: в нём нет ни одной мон�
 сам. Основной шрифт такой особенности не имеет, поэтому он и оставлен по
 умолчанию.
 
-ЗНАКИ ПРЕПИНАНИЯ. Их в шрифте нет вовсе — ни бирги, ни запятой, ни
-четырёх точек. При рисовании этим шрифтом знаки препинания опускаются.
+ЗНАКИ ПРЕПИНАНИЯ. В присланном шрифте их не было вовсе, поэтому бирга,
+запятая, точка, четыре точки, тире и узкий неразрывный пробел дорисованы
+в него отдельными глифами — см. tools/add_marks_to_clear_script.py. Здесь
+мы просто не выбрасываем знаки из текста, а переводим в те же коды, что и
+основной путь, чтобы дальше сработала общая логика из punctuation.py.
 """
 
 import json
@@ -51,8 +54,17 @@ _MACRON_SPLIT = {
     "ā": "aˉ", "ē": "eˉ", "ī": "iˉ", "ō": "oˉ", "ū": "uˉ", "ȫ": "öˉ", "ǖ": "üˉ",
 }
 
-# в этом шрифте знаков препинания нет — выкидываем всё, что не буква
-_KEEP_RE = re.compile(r"[^a-zａ-ｚāēīōūȫǖöüγčšǰ\sˉ-]", re.IGNORECASE)
+# Знаки препинания переводим в те же вертикальные формы, что и основной
+# путь: дальше их подхватит punctuation.py и превратит в ᠂ ᠃ ᠅.
+_PUNCT = {
+    ",": "︐",
+    ".": "︒",
+    "!": "︕",
+    "?": "︖",
+}
+
+# буквы транслитерации — всё остальное считаем «между словами»
+_LETTERS_RE = re.compile(r"[a-zāēīōūȫǖöüγčšǰˉ]+", re.IGNORECASE)
 
 
 def _split_lat(s: str) -> str:
@@ -123,13 +135,39 @@ class ClearScriptRules:
         return "".join(reversed(chunks))
 
     def translit_to_font(self, translit: str) -> str:
-        """Строка транслитерации -> строка, которую рисует Clear Script."""
+        """Строка транслитерации -> строка, которую рисует Clear Script.
+
+        Буквы идут через правила, всё остальное — знаки препинания, тире,
+        пробелы — переносится один в один, только в те же коды, что и на
+        основном пути. Поэтому текст остаётся текстом: и перенос по
+        столбцам, и расстановка бирги работают как обычно.
+        """
+        from .translit_todo import _dashes_to_vertical
+
         out_lines = []
-        for line in str(translit).split("\n"):
-            line = _KEEP_RE.sub(" ", line)
-            words = [w for w in _split_lat(line).split("-") if w]
-            out_lines.append(" ".join(self._word(w) for w in words))
+        for line in _dashes_to_vertical(str(translit)).split("\n"):
+            out, pos = [], 0
+            for m in _LETTERS_RE.finditer(line):
+                out.append(self._between(line[pos:m.start()]))
+                out.append(self._word(_split_lat(m.group())))
+                pos = m.end()
+            out.append(self._between(line[pos:]))
+            out_lines.append("".join(out))
         return "\n".join(out_lines)
+
+    @staticmethod
+    def _between(chunk: str) -> str:
+        """То, что между словами: пробелы, знаки, дефис-граница суффикса."""
+        out = []
+        for ch in chunk:
+            if ch in _PUNCT:
+                out.append(_PUNCT[ch])
+            elif ch == "-":
+                out.append("\u202f")      # граница суффикса, как в основном пути
+            elif ch.isspace() or ch == "\uFE31":
+                out.append(ch)
+            # остальное (цифры, скобки) в этом шрифте всё равно не нужно
+        return "".join(out)
 
 
 _RULES = None

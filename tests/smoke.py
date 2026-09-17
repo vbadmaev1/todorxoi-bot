@@ -272,6 +272,23 @@ async def main():
     check(r_uni.image_size != r_clr.image_size or True,
           f"обе картинки построились: {r_uni.image_size} и {r_clr.image_size}")
 
+    # знаки препинания должны доезжать и до второго шрифта
+    marked = add_punctuation(translit_to_font("eke, ecege. ābu?"))
+    check(marked.startswith("\u1800"), "бирга ставится и в Clear Script")
+    check("\u1802" in marked and "\u1803" in marked and marked.rstrip().endswith("\u1805"),
+          "запятая, точка и четыре точки — тоже")
+    # fontTools нужен только инструментам из tools/, боту он не нужен —
+    # поэтому проверка мягкая
+    try:
+        from fontTools.ttLib import TTFont as _TTFont
+
+        from core.clear_script import FONT_PATH as _CS_FONT
+        cmap = _TTFont(str(_CS_FONT)).getBestCmap()
+        check(all(cp in cmap for cp in (0x1800, 0x1802, 0x1803, 0x1805, 0xFE31, 0x202F)),
+              "все дорисованные глифы есть в шрифте")
+    except ImportError:
+        print("  [--] fontTools не установлен, проверку глифов пропускаю")
+
     print("\n4b. Настройки картинки")
     await dp.feed_update(bot, msg("/settings"))
     _, m = session.last("SendMessage")

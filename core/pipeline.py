@@ -203,10 +203,14 @@ def process(text: str, target: str, options: Optional[ImageOptions] = None) -> R
             t0 = time.perf_counter()
             res.todo = translit_to_todo(res.translit)
             res.steps_ms["translit→тодо"] = (time.perf_counter() - t0) * 1000
-        # Что именно уедет в шрифт, зависит от выбранного шрифта:
-        #   universal — юникод тодо бичиг плюс знаки препинания;
-        #   clear     — особая кириллическая запись, знаков препинания в
-        #               этом шрифте нет вовсе, поэтому и не ставим.
+        # Что уедет в шрифт, зависит от выбранного:
+        #   universal — юникод тодо бичиг;
+        #   clear     — особая кириллическая запись по правилам.
+        # Знаки препинания в обоих случаях расставляются одинаково: в
+        # Clear Script они дорисованы отдельными глифами, см.
+        # tools/add_marks_to_clear_script.py.
+        from .punctuation import add_punctuation
+
         t0 = time.perf_counter()
         if opts.font == "clear":
             from .clear_script import translit_to_font
@@ -214,9 +218,8 @@ def process(text: str, target: str, options: Optional[ImageOptions] = None) -> R
             source = res.translit or todo_to_translit(res.todo)
             render_text = translit_to_font(source)
         else:
-            from .punctuation import add_punctuation
-
-            render_text = add_punctuation(res.todo)
+            render_text = res.todo
+        render_text = add_punctuation(render_text)
         res.steps_ms["знаки"] = (time.perf_counter() - t0) * 1000
 
         t0 = time.perf_counter()
