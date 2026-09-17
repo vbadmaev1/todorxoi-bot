@@ -34,6 +34,8 @@ import argparse
 import math
 from pathlib import Path
 
+from fontTools.misc.transform import Transform
+from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import TTFont
 
@@ -53,6 +55,18 @@ FOUR_DY = 175            # и поперёк
 DASH_LEN = 918
 DASH_THICK = 59
 
+# Отступ слева у знаков. Буквы Clear Script соединяются, поэтому их
+# чернила заходят за шаг: у «Щ» — на 181 единицу. Со штатным отступом
+# запятой в 145 знак налезал на хвост буквы. Берём с запасом.
+MARK_LEFT_PAD = 110
+
+# Вопросительный и восклицательный знаки в шрифте есть только обычные,
+# «лежачие» для вертикального письма — нет. Берём его же глифы и
+# поворачиваем: так начертание совпадает со шрифтом точно.
+ROTATED_FROM = {0xFE15: "!", 0xFE16: "?"}
+ROTATE_DEG = 90          # проверено рендером: после поворота строки стоят прямо
+ROTATED_PAD = 90         # отступ слева, как у остальных знаков
+
 MARKS = {
     0x1800: "uni1800",   # ᠀ бирга
     0x1802: "uni1802",   # ᠂ запятая
@@ -60,6 +74,8 @@ MARKS = {
     0x1805: "uni1805",   # ᠅ четыре точки
     0xFE31: "uniFE31",   # ︱ тире
     0x202F: "uni202F",   # узкий неразрывный пробел — граница суффикса
+    0xFE15: "uniFE15",   # ︕ восклицательный, повёрнутый
+    0xFE16: "uniFE16",   # ︖ вопросительный, повёрнутый
 }
 
 # Пустой глиф: рисовать нечего, важен только шаг. У обычного пробела в
@@ -138,24 +154,24 @@ def _spiral(center, r0, r1, a0, turns, steps):
 
 
 def draw_comma(pen):
-    _rhomb(pen, 201, _cy())
-    return 391
+    _rhomb(pen, 201 + MARK_LEFT_PAD, _cy())
+    return 391 + MARK_LEFT_PAD
 
 
 def draw_stop(pen):
     cy = _cy()
-    _rhomb(pen, 201, cy)
-    _rhomb(pen, 201 + STOP_GAP, cy)
-    return 642
+    _rhomb(pen, 201 + MARK_LEFT_PAD, cy)
+    _rhomb(pen, 201 + STOP_GAP + MARK_LEFT_PAD, cy)
+    return 642 + MARK_LEFT_PAD
 
 
 def draw_four(pen):
-    cx, cy = 279, _cy()
+    cx, cy = 279 + MARK_LEFT_PAD, _cy()
     _rhomb(pen, cx - FOUR_DX, cy)
     _rhomb(pen, cx + FOUR_DX, cy)
     _rhomb(pen, cx, cy + FOUR_DY)
     _rhomb(pen, cx, cy - FOUR_DY)
-    return 552
+    return 552 + MARK_LEFT_PAD
 
 
 def draw_dash(pen):
@@ -201,6 +217,40 @@ BUILDERS = {
 }
 
 
+def _rotated_glyph(font, src_char, angle_deg, left_pad):
+    """Копия глифа шрифта, повёрнутая на 90°.
+
+    Вопросительный и восклицательный знаки в вертикальном письме стоят
+    прямо, а строка перед показом поворачивается целиком — значит в самом
+    шрифте они должны лежать на боку. Рисовать их заново незачем: берём
+    те же глифы шрифта и поворачиваем, тогда начертание совпадает точь-в-точь.
+
+    Поворот делается в два прохода: сперва вхолостую, чтобы узнать
+    габариты, потом со сдвигом, который ставит знак на нужное место
+    относительно стержня.
+    """
+    glyphset = font.getGlyphSet()
+    name = font.getBestCmap()[ord(src_char)]
+    angle = math.radians(angle_deg)
+
+    probe = TTGlyphPen(None)
+    glyphset[name].draw(TransformPen(probe, Transform().rotate(angle)))
+    box = probe.glyph()
+    box.recalcBounds(font["glyf"])
+
+    # сдвигаем: слева — отступ, по вертикали — центрируем на стержне
+    dx = left_pad - box.xMin
+    dy = _cy() - (box.yMin + box.yMax) / 2
+    pen = TTGlyphPen(None)
+    glyphset[name].draw(
+        TransformPen(pen, Transform().translate(dx, dy).rotate(angle))
+    )
+    glyph = pen.glyph()
+    glyph.recalcBounds(font["glyf"])
+    advance = glyph.xMax + left_pad     # такой же зазор справа
+    return glyph, advance
+
+
 def add_marks(src: Path, out: Path) -> None:
     font = TTFont(src)
     upem = font["head"].unitsPerEm
@@ -210,11 +260,16 @@ def add_marks(src: Path, out: Path) -> None:
 
     added = []
     for cp, name in MARKS.items():
-        pen = TTGlyphPen(None)
-        advance = BUILDERS[cp](pen)
-        glyph = pen.glyph()
-        if scale != 1.0:  # на случай другого upem
-            glyph.recalcBounds(glyf)
+        if cp in ROTATED_FROM:
+            glyph, advance = _rotated_glyph(
+                font, ROTATED_FROM[cp], ROTATE_DEG, ROTATED_PAD
+            )
+        else:
+            pen = TTGlyphPen(None)
+            advance = BUILDERS[cp](pen)
+            glyph = pen.glyph()
+            if scale != 1.0:  # на случай другого upem
+                glyph.recalcBounds(glyf)
         glyf[name] = glyph
         hmtx[name] = (int(advance * scale), 0)
         if name not in order:

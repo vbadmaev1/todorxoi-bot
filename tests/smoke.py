@@ -250,6 +250,15 @@ async def main():
 
     from core.punctuation import add_punctuation
 
+    from core.punctuation import FRAME_MIN_CHARS, needs_frame
+
+    check(not needs_frame("хальмг улс"), "короткий текст не обрамляется")
+    check(needs_frame("х" * (FRAME_MIN_CHARS + 1)), "длинный — обрамляется")
+    plain_short = add_punctuation(translit_to_todo("eke. ecege."), frame=False)
+    check("\u1800" not in plain_short and "\u1805" not in plain_short,
+          "без обрамления нет ни бирги, ни четырёх точек")
+    check("\u1803" in plain_short, "а обычная точка на месте")
+
     marked = add_punctuation(translit_to_todo("xalimaq ulus, eke. ecege."))
     check(marked.startswith("\u1800"), "в начале текста стоит бирга")
     check("\u1802" in marked, "запятая заменена на ᠂")
@@ -284,8 +293,19 @@ async def main():
 
         from core.clear_script import FONT_PATH as _CS_FONT
         cmap = _TTFont(str(_CS_FONT)).getBestCmap()
-        check(all(cp in cmap for cp in (0x1800, 0x1802, 0x1803, 0x1805, 0xFE31, 0x202F)),
+        check(all(cp in cmap for cp in (0x1800, 0x1802, 0x1803, 0x1805,
+                                        0xFE31, 0x202F, 0xFE15, 0xFE16)),
               "все дорисованные глифы есть в шрифте")
+        # запятая не должна налезать на хвост буквы: её отступ слева
+        # обязан перекрывать самый большой вынос чернил за шаг
+        ft = _TTFont(str(_CS_FONT))
+        glyf, hm = ft["glyf"], ft["hmtx"]
+        overhang = max(glyf[g].xMax - hm[g][0]
+                       for g in ft.getGlyphOrder()
+                       if glyf[g].numberOfContours > 0)
+        comma_lsb = glyf[cmap[0x1802]].xMin
+        check(comma_lsb > overhang,
+              f"отступ у запятой {comma_lsb} больше выноса букв {overhang}")
     except ImportError:
         print("  [--] fontTools не установлен, проверку глифов пропускаю")
 

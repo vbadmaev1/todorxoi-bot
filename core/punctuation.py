@@ -17,6 +17,11 @@ punctuation.py — знаки препинания для картинки.
 вопросительным или восклицательным знаком, знак остаётся, а четыре точки
 добавляются после него.
 
+Бирга и четыре точки — это разметка целой записи, поэтому на коротком
+тексте они выглядят громоздко: одно слово не нуждается в том, чтобы его
+открывали и закрывали. Ставим их только начиная с FRAME_MIN_CHARS
+символов исходного текста; запятые и точки внутри работают всегда.
+
 На вход приходит уже готовый юникод тодо бичиг, где знаки препинания
 записаны вертикальными презентационными формами (︒ ︐ ︕ ︖) — так их
 превращает таблица в translit_todo.py.
@@ -35,9 +40,21 @@ _SRC_QUES = "︖"
 
 _TERMINAL = (_SRC_EXCL, _SRC_QUES)
 
+# с какой длины исходного текста имеет смысл обрамлять запись
+FRAME_MIN_CHARS = 100
 
-def add_punctuation(todo_text: str, birga: bool = True) -> str:
-    """Расставляет знаки препинания тодо бичиг в готовой строке."""
+
+def needs_frame(source_text: str) -> bool:
+    """Достаточно ли текст велик, чтобы обрамлять его биргой и четырьмя
+    точками. Считаем по исходному сообщению — это то, что видит человек."""
+    return len((source_text or "").strip()) > FRAME_MIN_CHARS
+
+
+def add_punctuation(todo_text: str, frame: bool = True) -> str:
+    """Расставляет знаки препинания тодо бичиг в готовой строке.
+
+    frame=False — без бирги в начале и без четырёх точек в конце: точка
+    в конце тогда остаётся обычной."""
     if not todo_text:
         return todo_text
 
@@ -48,6 +65,10 @@ def add_punctuation(todo_text: str, birga: bool = True) -> str:
     stripped = text.rstrip()
     trailing = text[len(stripped):]
     last = stripped[-1] if stripped else ""
+
+    if not frame:
+        # короткий текст: ни бирги, ни четырёх точек — только обычные знаки
+        return text.replace(_SRC_STOP, FULL_STOP)
 
     if last == _SRC_STOP:
         # последняя точка — это конец всего текста
@@ -61,4 +82,4 @@ def add_punctuation(todo_text: str, birga: bool = True) -> str:
         # текст без концевого знака — четыре точки не навязываем
         text = text.replace(_SRC_STOP, FULL_STOP)
 
-    return (BIRGA + text) if birga else text
+    return BIRGA + text

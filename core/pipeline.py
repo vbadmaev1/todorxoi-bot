@@ -209,7 +209,7 @@ def process(text: str, target: str, options: Optional[ImageOptions] = None) -> R
         # Знаки препинания в обоих случаях расставляются одинаково: в
         # Clear Script они дорисованы отдельными глифами, см.
         # tools/add_marks_to_clear_script.py.
-        from .punctuation import add_punctuation
+        from .punctuation import add_punctuation, needs_frame
 
         t0 = time.perf_counter()
         if opts.font == "clear":
@@ -219,7 +219,10 @@ def process(text: str, target: str, options: Optional[ImageOptions] = None) -> R
             render_text = translit_to_font(source)
         else:
             render_text = res.todo
-        render_text = add_punctuation(render_text)
+        # бирга и четыре точки — только для длинного текста
+        render_text = add_punctuation(
+            render_text, frame=needs_frame(res.source_text)
+        )
         res.steps_ms["знаки"] = (time.perf_counter() - t0) * 1000
 
         t0 = time.perf_counter()
