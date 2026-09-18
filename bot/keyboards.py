@@ -27,7 +27,14 @@ CB_CONVERT = "conv"
 CB_SETTINGS = "set"
 
 SIZE_LABELS = {"small": "мелкий", "medium": "средний", "large": "крупный"}
-FONT_LABELS = {"universal": "классический", "clear": "Clear Script"}
+FONT_LABELS = {
+    "universal": "классический",
+    "clear": "Clear Script",
+    "biyir": "Biyir",
+    "demberil": "Demberil",
+    "garcaq": "Garcaq",
+    "zakaa": "Zakaa",
+}
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -160,12 +167,11 @@ def font_picker(current: str) -> InlineKeyboardMarkup:
         )
         for key, label in FONT_LABELS.items()
     ]
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            buttons,
-            [InlineKeyboardButton(text="‹ Назад", callback_data=f"{CB_SETTINGS}:back:-")],
-        ]
+    rows = _grid(buttons, per_row=2)
+    rows.append(
+        [InlineKeyboardButton(text="‹ Назад", callback_data=f"{CB_SETTINGS}:back:-")]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def rated_keyboard(rating: str) -> InlineKeyboardMarkup:

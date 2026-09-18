@@ -268,44 +268,53 @@ async def main():
     check(q.rstrip().endswith("\ufe16\u1805"),
           "после вопросительного знака четыре точки добавляются, знак остаётся")
 
-    print("\n4a4. Второй шрифт")
+    print("\n4a4. Семейство шрифтов с кириллической записью")
     import core
     from core import ImageOptions
-    from core.clear_script import available, translit_to_font
+    from core.clear_script import FONT_FILES, available, font_path, translit_to_font
+    from core.pipeline import FONTS
 
-    check(available(), "файлы Clear Script на месте")
+    check(available(), "файлы всех шрифтов семейства на месте")
+    check(len(FONTS) == len(FONT_FILES) + 1,
+          f"в настройках доступны все шрифты: {FONTS}")
     check(translit_to_font("xalimaq") == "ХалимаЩ",
           f"правила дают запись для шрифта: {translit_to_font('xalimaq')}")
-    r_uni = core.process("хальмг", "image", ImageOptions(font="universal"))
-    r_clr = core.process("хальмг", "image", ImageOptions(font="clear"))
-    check(r_uni.image_size != r_clr.image_size or True,
-          f"обе картинки построились: {r_uni.image_size} и {r_clr.image_size}")
+    # запись у семейства общая, поэтому каждый шрифт должен нарисовать её
+    for key in FONTS:
+        r = core.process("хальмг", "image", ImageOptions(font=key))
+        check(bool(r.image_size) and r.image_size[0] > 0,
+              f"картинка шрифтом {key}: {r.image_size}")
 
-    # знаки препинания должны доезжать и до второго шрифта
-    marked = add_punctuation(translit_to_font("eke, ecege. ābu?"))
-    check(marked.startswith("\u1800"), "бирга ставится и в Clear Script")
-    check("\u1802" in marked and "\u1803" in marked and marked.rstrip().endswith("\u1805"),
+    # знаки препинания должны доезжать и до кириллической записи
+    marked = add_punctuation(translit_to_font("eke, ecege. \u0101bu?"))
+    check(marked.startswith("\u1800"), "бирга ставится и в этой записи")
+    check("\u1802" in marked and "\u1803" in marked
+          and marked.rstrip().endswith("\u1805"),
           "запятая, точка и четыре точки — тоже")
     # fontTools нужен только инструментам из tools/, боту он не нужен —
     # поэтому проверка мягкая
     try:
         from fontTools.ttLib import TTFont as _TTFont
 
-        from core.clear_script import FONT_PATH as _CS_FONT
-        cmap = _TTFont(str(_CS_FONT)).getBestCmap()
-        check(all(cp in cmap for cp in (0x1800, 0x1802, 0x1803, 0x1805,
-                                        0xFE31, 0x202F, 0xFE15, 0xFE16)),
-              "все дорисованные глифы есть в шрифте")
-        # запятая не должна налезать на хвост буквы: её отступ слева
-        # обязан перекрывать самый большой вынос чернил за шаг
-        ft = _TTFont(str(_CS_FONT))
-        glyf, hm = ft["glyf"], ft["hmtx"]
-        overhang = max(glyf[g].xMax - hm[g][0]
-                       for g in ft.getGlyphOrder()
-                       if glyf[g].numberOfContours > 0)
-        comma_lsb = glyf[cmap[0x1802]].xMin
-        check(comma_lsb > overhang,
-              f"отступ у запятой {comma_lsb} больше выноса букв {overhang}")
+        from tools.add_marks_to_fonts import MARKS as _MARKS
+
+        _drawn = set(_MARKS.values())
+        for key in FONT_FILES:
+            ft = _TTFont(str(font_path(key)))
+            cmap, glyf, hm = ft.getBestCmap(), ft["glyf"], ft["hmtx"]
+            check(all(cp in cmap for cp in _MARKS),
+                  f"{key}: все дорисованные глифы на месте")
+            # Знак не должен налезать на хвост предыдущей буквы. Пробела в
+            # тексте нет: отступ заложен слева от чернил самого глифа, и он
+            # обязан перекрывать самый большой вынос чернил букв за шаг.
+            overhang = max(glyf[g].xMax - hm[g][0]
+                           for g in ft.getGlyphOrder()
+                           if g not in _drawn and glyf[g].numberOfContours > 0)
+            for cp, title in ((0x1802, "запятой"), (0x1803, "точки"),
+                              (0xFE16, "вопроса")):
+                lsb = glyf[cmap[cp]].xMin
+                check(lsb > overhang,
+                      f"{key}: отступ у {title} {lsb} больше выноса {overhang}")
     except ImportError:
         print("  [--] fontTools не установлен, проверку глифов пропускаю")
 

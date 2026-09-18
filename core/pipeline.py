@@ -36,14 +36,22 @@ MAX_INPUT_CHARS = 1000
 FONT_SIZES = {"small": 44, "medium": 64, "large": 96}
 DEFAULT_FONT_SIZE = "medium"
 
-# Два шрифта, два разных способа рисовать одно и то же.
+# Два способа рисовать одно и то же — и шесть шрифтов на выбор.
 #   universal — MongolianUniversalWhite: настоящий юникод тодо бичиг, формы
-#               букв выбирает HarfBuzz, знаки препинания на месте;
-#   clear     — Clear Script: рисует по особой кириллической записи, которую
-#               строят статистические правила; знаков препинания в шрифте
-#               нет. Подробности — в core/clear_script.py.
-FONTS = ("universal", "clear")
+#               букв выбирает HarfBuzz;
+#   остальные — семейство Clear Script: рисуют по особой кириллической
+#               записи, которую строят статистические правила. Начертания
+#               разные, правила общие. Подробности — в core/clear_script.py.
 DEFAULT_FONT = "universal"
+
+
+def _font_keys():
+    from .clear_script import FONT_FILES
+
+    return (DEFAULT_FONT,) + tuple(FONT_FILES)
+
+
+FONTS = _font_keys()
 
 
 @dataclass
@@ -67,11 +75,18 @@ class ImageOptions:
         return int(os.environ.get("MAX_COLUMN_HEIGHT", "900")) * self.font_size // 64
 
     @property
+    def uses_rules(self) -> bool:
+        """Нужно ли строить кириллическую запись вместо юникода."""
+        return self.font != DEFAULT_FONT
+
+    @property
     def font_path(self):
-        from .clear_script import FONT_PATH as CLEAR_FONT
+        from .clear_script import font_path
         from .todo_image import DEFAULT_TODO_FONT
 
-        return str(CLEAR_FONT) if self.font == "clear" else DEFAULT_TODO_FONT
+        if not self.uses_rules:
+            return DEFAULT_TODO_FONT
+        return str(font_path(self.font))
 
     def as_dict(self) -> dict:
         return {"fg": self.fg, "bg": self.bg, "size": self.size, "font": self.font}
@@ -205,14 +220,14 @@ def process(text: str, target: str, options: Optional[ImageOptions] = None) -> R
             res.steps_ms["translit→тодо"] = (time.perf_counter() - t0) * 1000
         # Что уедет в шрифт, зависит от выбранного:
         #   universal — юникод тодо бичиг;
-        #   clear     — особая кириллическая запись по правилам.
+        #   остальные — особая кириллическая запись по правилам.
         # Знаки препинания в обоих случаях расставляются одинаково: в
-        # Clear Script они дорисованы отдельными глифами, см.
-        # tools/add_marks_to_clear_script.py.
+        # семейство Clear Script они дорисованы отдельными глифами, см.
+        # tools/add_marks_to_fonts.py.
         from .punctuation import add_punctuation, needs_frame
 
         t0 = time.perf_counter()
-        if opts.font == "clear":
+        if opts.uses_rules:
             from .clear_script import translit_to_font
 
             source = res.translit or todo_to_translit(res.todo)
