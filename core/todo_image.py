@@ -291,6 +291,98 @@ def _render_column(subline, font, font_path, font_size, fg, bg, pad=6):
     return strip.rotate(-90, expand=True)
 
 
+def _build_columns(
+    lines,
+    font_size=64,
+    max_column_height=900,
+    fg="black",
+    bg="white",
+    font_path=DEFAULT_TODO_FONT,
+):
+    """Текст -> готовые вертикальные столбцы.
+
+    Возвращает (столбцы, цвет текста, цвет фона, был ли откат по цветам).
+    Каждый столбец — (картинка, начинает ли он новую логическую строку):
+    по второму значению собиратель понимает, какой отступ ставить слева.
+    """
+    require_shaping()
+
+    if isinstance(lines, str):
+        lines = lines.split("\n")
+
+    fg, bg, color_fallback = _resolve_fg_bg(fg, bg)
+    font = _load_font(font_path, font_size)
+    draw_probe = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
+
+    columns = []
+    for line in lines:
+        line = line.strip("\n")
+        if not line.strip():
+            continue
+        sublines = _wrap_line(
+            line, font, font_path, font_size, max_column_height, draw_probe
+        )
+        for i, subline in enumerate(sublines):
+            col = _render_column(subline, font, font_path, font_size, fg, bg)
+            columns.append((col, i == 0))
+
+    if not columns:
+        raise ValueError("нечего рендерить — пустой текст")
+    return columns, fg, bg, color_fallback
+
+
+def _gap_before(index, is_new_line, column_gap, line_gap):
+    """Отступ слева от столбца. У первого на листе отступа нет."""
+    if index == 0:
+        return 0
+    return line_gap if is_new_line else column_gap
+
+
+def _page_width(columns, column_gap, line_gap, margin):
+    width = margin * 2
+    for i, (col, is_new_line) in enumerate(columns):
+        width += _gap_before(i, is_new_line, column_gap, line_gap) + col.width
+    return width
+
+
+def _compose(columns, bg, column_gap, line_gap, margin, height=None):
+    """Столбцы -> один лист. Столбцы идут слева направо.
+
+    height задаётся снаружи, когда листов несколько: высота столбца зависит
+    от того, насколько длинной вышла последняя строка на листе, и без общей
+    высоты листы получались бы чуть разными — в чате это сразу видно."""
+    width = _page_width(columns, column_gap, line_gap, margin)
+    height = height or max(c.height for c, _ in columns) + margin * 2
+    canvas = Image.new("RGBA", (width, height), bg)
+    x = margin
+    for i, (col, is_new_line) in enumerate(columns):
+        x += _gap_before(i, is_new_line, column_gap, line_gap)
+        canvas.paste(col, (x, margin), col)
+        x += col.width
+    return canvas
+
+
+def _split_pages(columns, max_width, column_gap, line_gap, margin):
+    """Режет поток столбцов на листы по ширине.
+
+    Порядок столбцов не меняется, поэтому листы читаются подряд: первый,
+    второй и так далее. Один столбец шире листа влезть не может по
+    построению (его ширина — это кегль), так что бесконечного цикла нет.
+    """
+    pages, current, width = [], [], margin * 2
+    for col, is_new_line in columns:
+        need = _gap_before(len(current), is_new_line, column_gap, line_gap) + col.width
+        if current and width + need > max_width:
+            pages.append(current)
+            current, width = [], margin * 2
+            need = col.width
+        current.append((col, is_new_line))
+        width += need
+    if current:
+        pages.append(current)
+    return pages
+
+
 def render_todo_paragraph(
     lines,
     out_path=None,
@@ -312,47 +404,11 @@ def render_todo_paragraph(
     Возвращает объект PIL.Image; атрибут .color_fallback на нём говорит,
     пришлось ли откатиться на чёрное-по-белому из-за совпавших цветов.
     """
-    require_shaping()
-
-    if isinstance(lines, str):
-        lines = lines.split("\n")
-
-    fg, bg, color_fallback = _resolve_fg_bg(fg, bg)
-    font = _load_font(font_path, font_size)
-    probe = Image.new("RGBA", (10, 10))
-    draw_probe = ImageDraw.Draw(probe)
-
-    columns = []  # (image, is_first_subline_of_its_logical_line)
-    for line in lines:
-        line = line.strip("\n")
-        if not line.strip():
-            continue
-        sublines = _wrap_line(
-            line, font, font_path, font_size, max_column_height, draw_probe
-        )
-        for i, subline in enumerate(sublines):
-            col = _render_column(subline, font, font_path, font_size, fg, bg)
-            columns.append((col, i == 0))
-
-    if not columns:
-        raise ValueError("нечего рендерить — пустой текст")
-
-    total_width = sum(c.width for c, _ in columns)
-    total_width += column_gap * (len(columns) - 1)
-    total_width += (line_gap - column_gap) * sum(
-        1 for i, (_, is_new) in enumerate(columns) if is_new and i > 0
+    columns, _fg, bg, color_fallback = _build_columns(
+        lines, font_size=font_size, max_column_height=max_column_height,
+        fg=fg, bg=bg, font_path=font_path,
     )
-    max_height = max(c.height for c, _ in columns)
-
-    canvas = Image.new(
-        "RGBA", (total_width + margin * 2, max_height + margin * 2), bg
-    )
-    x = margin
-    for i, (col, is_new_line) in enumerate(columns):
-        if i > 0:
-            x += line_gap if is_new_line else column_gap
-        canvas.paste(col, (x, margin), col)
-        x += col.width
+    canvas = _compose(columns, bg, column_gap, line_gap, margin)
 
     if out_path:
         canvas.save(out_path)
@@ -374,6 +430,12 @@ def render_todo_image(text, out_path=None, **kwargs):
 
 
 MAX_SIDE = 2600  # у Telegram сумма сторон фото ограничена, да и смысла нет
+
+# Сколько листов согласны отправить за один запрос. Каждый лист — отдельное
+# сообщение, а Telegram считает их частоту, поэтому счёт идёт на десятки, а
+# не на сотни. Двадцати хватает на десять тысяч символов (MAX_INPUT_CHARS)
+# даже крупным кеглем: там выходит шестнадцать листов.
+MAX_PAGES = 20
 
 # К чему стремимся по большей стороне. Шрифт векторный, «разрешения» у него
 # нет — сколько пикселей попросим, столько и нарисует. Но кегль задаёт ещё и
@@ -397,32 +459,8 @@ def _quality_scale(size):
     return min(MAX_SCALE, TARGET_MIN_SIDE / longest)
 
 
-def render_todo_bytes(todo_text, max_side=MAX_SIDE, **kwargs):
-    """Готовый текст тодо бичиг -> PNG в памяти (io.BytesIO).
-    Именно этим пользуется бот: файл на диск не пишется.
-
-    Возвращает (BytesIO, (ширина, высота), meta), где meta — словарь с
-    color_fallback (пришлось ли спасать совпавшие цвета) и transparent
-    (прозрачный ли фон; такую картинку нельзя слать как фото — Telegram
-    пережмёт её в JPEG и прозрачность превратится в чёрный).
-    Слишком большая картинка ужимается по большей стороне."""
-    img = render_todo_paragraph(todo_text, out_path=None, **kwargs)
-    color_fallback = getattr(img, "color_fallback", False)
-
-    # мелкую картинку перерисовываем крупнее — именно перерисовываем, а не
-    # растягиваем: растягивание добавит размытия, но не деталей
-    scale = _quality_scale(img.size)
-    if scale > 1.01:
-        # все три величины умножаем на один множитель — вёрстка остаётся
-        # прежней до пикселя, меняется только плотность
-        img = render_todo_paragraph(
-            todo_text, out_path=None,
-            **{**kwargs,
-               "font_size": round(kwargs.get("font_size", 64) * scale),
-               "max_column_height": round(kwargs.get("max_column_height", 900) * scale),
-               "margin": round(kwargs.get("margin", 36) * scale)},
-        )
-
+def _to_png(img, max_side):
+    """Картинка -> PNG в памяти. Слишком большую ужимаем по большей стороне."""
     if max_side and max(img.size) > max_side:
         scale = max_side / max(img.size)
         img = img.resize(
@@ -432,13 +470,72 @@ def render_todo_bytes(todo_text, max_side=MAX_SIDE, **kwargs):
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
+    return buf, img.size
+
+
+def render_todo_pages(todo_text, max_side=MAX_SIDE, max_pages=MAX_PAGES, **kwargs):
+    """Готовый текст тодо бичиг -> список листов-PNG. Этим пользуется бот.
+
+    Длинный текст в одну картинку не влезает: столбцы идут слева направо, и
+    чтобы вместить их все, картинку пришлось бы ужать до нечитаемого.
+    Поэтому поток столбцов режется на листы шириной не больше max_side —
+    каждый лист остаётся крупным, а читаются они подряд.
+
+    Возвращает (листы, meta), где лист — (BytesIO, (ширина, высота)), а
+    meta — словарь с color_fallback (пришлось ли спасать совпавшие цвета),
+    transparent (прозрачный ли фон; такую картинку нельзя слать как фото —
+    Telegram пережмёт её в JPEG и прозрачность станет чёрным) и truncated
+    (сколько листов не поместилось в max_pages).
+    """
+    column_gap = kwargs.get("column_gap", 14)
+    line_gap = kwargs.get("line_gap", 40)
+    margin = kwargs.get("margin", 36)
+    build_kwargs = {k: v for k, v in kwargs.items()
+                    if k not in ("column_gap", "line_gap", "margin")}
+
+    columns, _fg, bg, color_fallback = _build_columns(todo_text, **build_kwargs)
+
+    # Мелкую картинку перерисовываем крупнее — именно перерисовываем, а не
+    # растягиваем: растягивание добавит размытия, но не деталей. Длинного
+    # текста это не касается, он и так во весь лист.
+    width = _page_width(columns, column_gap, line_gap, margin)
+    height = max(c.height for c, _ in columns) + margin * 2
+    scale = _quality_scale((width, height)) if width <= max_side else 1.0
+    if scale > 1.01:
+        # все величины умножаем на один множитель — вёрстка остаётся прежней
+        # до пикселя, меняется только плотность
+        margin, column_gap, line_gap = (round(v * scale)
+                                        for v in (margin, column_gap, line_gap))
+        columns, _fg, bg, color_fallback = _build_columns(todo_text, **{
+            **build_kwargs,
+            "font_size": round(kwargs.get("font_size", 64) * scale),
+            "max_column_height": round(
+                kwargs.get("max_column_height", 900) * scale),
+        })
+
+    sheets = _split_pages(columns, max_side, column_gap, line_gap, margin)
+    # высота у всех листов общая — по самому длинному столбцу
+    height = max(c.height for c, _ in columns) + margin * 2
+    pages = [
+        _to_png(
+            _compose(sheet, bg, column_gap, line_gap, margin, height), max_side
+        )
+        for sheet in sheets[:max_pages]
+    ]
     meta = {
         "color_fallback": color_fallback,
         # прозрачность запрашивали и её не отменил откат по совпавшим цветам
         "transparent": is_transparent(kwargs.get("bg")) and not color_fallback,
+        "truncated": max(0, len(sheets) - max_pages),
     }
-    return buf, img.size, meta
+    return pages, meta
 
+
+def render_todo_bytes(todo_text, max_side=MAX_SIDE, **kwargs):
+    """Первый лист — для кода, которому хватает одной картинки."""
+    pages, meta = render_todo_pages(todo_text, max_side=max_side, **kwargs)
+    buf, size = pages[0]
+    return buf, size, meta
 
 if __name__ == "__main__":
     print("Раскладка текста:", shaping_status())

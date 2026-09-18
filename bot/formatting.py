@@ -49,23 +49,39 @@ def render_result(res: Result) -> str:
     return "\n\n".join(blocks)
 
 
-def render_caption(res: Result) -> str:
+def render_caption(res: Result, page: int = 1, pages: int = 1) -> str:
     """Подпись под картинкой — то же самое, но с оглядкой на лимит в 1024."""
-    text = render_result(res) if res.target != "image" else _image_caption(res)
+    text = (
+        render_result(res)
+        if res.target != "image"
+        else _image_caption(res, page, pages)
+    )
     if len(text) <= CAPTION_LIMIT:
         return text
     return text[: CAPTION_LIMIT - 1] + "…"
 
 
-def _image_caption(res: Result) -> str:
+def _image_caption(res: Result, page: int = 1, pages: int = 1) -> str:
     # под картинкой транслитерацию не дублируем: кому она нужна, тот
     # спросит её отдельно командой /translit
-    blocks = [_header(res)]
-    if not res.shaping_ok:
-        from core.todo_image import SHAPING_WARNING
+    header = _header(res)
+    if pages > 1:
+        # Столбцы читаются слева направо, листы — по порядку. Номер нужен
+        # именно в подписи: в чате сообщения легко перепутать местами.
+        header += f" · картинка {page} из {pages}"
+    blocks = [header]
 
-        blocks.append(SHAPING_WARNING)
-    if res.color_fallback:
-        blocks.append(texts.COLOR_FALLBACK_NOTE)
-    blocks.append(timing_line(res))
+    # служебное говорим один раз, под первым листом: под каждым — шум
+    if page == 1:
+        if not res.shaping_ok:
+            from core.todo_image import SHAPING_WARNING
+
+            blocks.append(SHAPING_WARNING)
+        if res.color_fallback:
+            blocks.append(texts.COLOR_FALLBACK_NOTE)
+        if res.pages_dropped:
+            blocks.append(texts.PAGES_DROPPED.format(n=res.pages_dropped))
+
+    if page == pages:
+        blocks.append(timing_line(res))
     return "\n\n".join(blocks)

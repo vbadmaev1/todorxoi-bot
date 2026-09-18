@@ -31,7 +31,7 @@ TARGET_TRANSLIT = "translit"
 TARGET_TODO = "todo"
 TARGET_IMAGE = "image"
 
-MAX_INPUT_CHARS = 1000
+MAX_INPUT_CHARS = 10000
 
 FONT_SIZES = {"small": 44, "medium": 64, "large": 96}
 DEFAULT_FONT_SIZE = "medium"
@@ -103,8 +103,11 @@ class Result:
     source_script: str
     translit: Optional[str] = None
     todo: Optional[str] = None
-    image: Optional[object] = None  # io.BytesIO с PNG
-    image_size: Optional[Tuple[int, int]] = None
+    # Листы картинки: [(io.BytesIO с PNG, (ширина, высота))]. Длинный текст
+    # в одну картинку не влезает — см. render_todo_pages в todo_image.py.
+    pages: list = field(default_factory=list)
+    # столько листов пришлось отбросить, чтобы не заваливать чат
+    pages_dropped: int = 0
     # False — картинка нарисована без шейпинга: буквы не соединены
     shaping_ok: bool = True
     # прозрачный фон: такую картинку надо слать документом, не фото
@@ -114,6 +117,15 @@ class Result:
     elapsed_ms: float = 0.0
     steps_ms: dict = field(default_factory=dict)
     stats: dict = field(default_factory=dict)
+
+    @property
+    def image(self):
+        """Первый лист. Для кода, которому хватает одной картинки."""
+        return self.pages[0][0] if self.pages else None
+
+    @property
+    def image_size(self):
+        return self.pages[0][1] if self.pages else None
 
     @property
     def text_output(self) -> str:
@@ -200,7 +212,7 @@ def process(text: str, target: str, options: Optional[ImageOptions] = None) -> R
         from .todo_image import (
             SHAPING_OK,
             ShapingUnavailable,
-            render_todo_bytes,
+            render_todo_pages,
             require_shaping,
         )
 
@@ -247,7 +259,7 @@ def process(text: str, target: str, options: Optional[ImageOptions] = None) -> R
         res.steps_ms["знаки"] = (time.perf_counter() - t0) * 1000
 
         t0 = time.perf_counter()
-        res.image, res.image_size, meta = render_todo_bytes(
+        res.pages, meta = render_todo_pages(
             render_text,
             font_size=opts.font_size,
             max_column_height=opts.max_column_height,
@@ -257,6 +269,7 @@ def process(text: str, target: str, options: Optional[ImageOptions] = None) -> R
         )
         res.transparent = meta["transparent"]
         res.color_fallback = meta["color_fallback"]
+        res.pages_dropped = meta["truncated"]
         res.steps_ms["рендер"] = (time.perf_counter() - t0) * 1000
 
     else:

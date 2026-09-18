@@ -10,6 +10,7 @@ import logging
 
 from aiogram import F, Router
 from aiogram.enums import ChatAction
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
@@ -89,18 +90,49 @@ async def handle_text(
 
 
 async def _send_image(message: Message, res, markup) -> None:
-    photo = BufferedInputFile(res.image.getvalue(), filename="todo_bichig.png")
-    caption = formatting.render_caption(res)
-    w, h = res.image_size or (0, 0)
-    too_thin = h and (max(w, h) / max(1, min(w, h))) > _PHOTO_MAX_RATIO
-    # Прозрачный фон обязан уехать документом: фото Telegram пережимает в
-    # JPEG, а там прозрачности нет — она станет чёрным прямоугольником,
-    # то есть ровно то, ради чего человек её включал, и потеряется.
-    # Очень вытянутую картинку Telegram как фото просто не примет.
-    if res.transparent or too_thin:
-        await message.answer_document(photo, caption=caption, reply_markup=markup)
-    else:
-        await message.answer_photo(photo, caption=caption, reply_markup=markup)
+    """Отправляет листы картинки по порядку.
+
+    Длинный текст в одну картинку не влезает — рендер режет его на листы
+    (см. render_todo_pages). Шлём их отдельными сообщениями, подписывая
+    «лист N из M»: альбомом нельзя, к альбому не прицепишь кнопки, а
+    подпись у него общая. Кнопки 👍/👎 — под последним листом, они
+    относятся ко всему ответу.
+    """
+    total = len(res.pages)
+    for number, (buf, size) in enumerate(res.pages, start=1):
+        last = number == total
+        photo = BufferedInputFile(
+            buf.getvalue(),
+            filename=f"todo_bichig_{number}.png" if total > 1 else "todo_bichig.png",
+        )
+        caption = formatting.render_caption(res, page=number, pages=total)
+        w, h = size or (0, 0)
+        too_thin = h and (max(w, h) / max(1, min(w, h))) > _PHOTO_MAX_RATIO
+        # Прозрачный фон обязан уехать документом: фото Telegram пережимает в
+        # JPEG, а там прозрачности нет — она станет чёрным прямоугольником,
+        # то есть ровно то, ради чего человек её включал, и потеряется.
+        # Очень вытянутую картинку Telegram как фото просто не примет.
+        send = (
+            message.answer_document
+            if (res.transparent or too_thin)
+            else message.answer_photo
+        )
+        await _send_patiently(
+            send, photo, caption=caption, reply_markup=markup if last else None
+        )
+
+
+async def _send_patiently(send, *args, **kwargs):
+    """Отправка с оглядкой на ограничение частоты.
+
+    Десяток картинок подряд Telegram может притормозить и ответить «подожди
+    столько-то секунд». Ждём и повторяем — иначе человек получит половину
+    листов и решит, что остальные потерялись."""
+    try:
+        return await send(*args, **kwargs)
+    except TelegramRetryAfter as exc:
+        await asyncio.sleep(exc.retry_after + 1)
+        return await send(*args, **kwargs)
 
 
 @router.message(StateFilter(None), F.text.startswith("/"))

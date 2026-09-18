@@ -338,6 +338,44 @@ async def main():
         big, small = (core.process(w, "todo").todo for w in pair)
         check(big == small, f"{pair[0]} и {pair[1]} -> {big}")
 
+    print("\n4a6. Длинный текст — несколько картинок по порядку")
+    from core import MAX_INPUT_CHARS
+
+    check(MAX_INPUT_CHARS == 10000, f"лимит входа: {MAX_INPUT_CHARS}")
+    long_text = ("Хальмг улс мана һазр деер бәәнә. Эн бичг ут болх, учрн "
+                 "биргиг болн дөрвн цегиг зөвәр ут бичгт тәвнәвидн. " * 40)
+    long_text = long_text[:MAX_INPUT_CHARS]
+    res = core.process(long_text, "image")
+    check(len(res.pages) > 1, f"текст разложен на листы: {len(res.pages)}")
+    check(not res.pages_dropped, "все листы поместились")
+    check(res.image is res.pages[0][0], "res.image — первый лист")
+    # ширина каждого листа в пределах допустимого, высота одинаковая
+    from core.todo_image import MAX_SIDE
+
+    widths = [size[0] for _buf, size in res.pages]
+    heights = {size[1] for _buf, size in res.pages}
+    check(max(widths) <= MAX_SIDE, f"ширина листа не больше {MAX_SIDE}: {max(widths)}")
+    check(len(heights) == 1, f"высота у всех листов одна: {heights}")
+
+    before = len(session.calls)
+    await dp.feed_update(bot, msg(long_text))
+    sent = session.calls[before:]
+    photos = [m for name, m in sent if name in ("SendPhoto", "SendDocument")]
+    check(len(photos) == len(res.pages),
+          f"отправлено столько же сообщений, сколько листов: {len(photos)}")
+    check(f"картинка 1 из {len(photos)}" in (photos[0].caption or ""),
+          f"первый лист подписан: {(photos[0].caption or '')[:60]}")
+    check(f"картинка {len(photos)} из {len(photos)}" in (photos[-1].caption or ""),
+          "последний лист подписан")
+    check(photos[-1].reply_markup and not photos[0].reply_markup,
+          "кнопки 👍/👎 — только под последним листом")
+
+    # короткому тексту номера не нужны
+    await dp.feed_update(bot, msg("хальмг"))
+    _name, m = session.last()
+    check("из" not in (m.caption or "").split("\n")[0],
+          f"одна картинка — без нумерации: {(m.caption or '').split(chr(10))[0]}")
+
     print("\n4b. Настройки картинки")
     await dp.feed_update(bot, msg("/settings"))
     _, m = session.last("SendMessage")
