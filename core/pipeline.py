@@ -145,11 +145,16 @@ def _to_translit(text: str, script: str, res: Result) -> str:
         res.steps_ms["todo→translit"] = (time.perf_counter() - t0) * 1000
         return out
     if script == SCRIPT_CYRILLIC:
-        # импорт здесь, а не наверху: torch тянется только когда реально нужен
         from .transliterate import transliterate_with_stats
 
         t0 = time.perf_counter()
-        out, stats = transliterate_with_stats(text)
+        # Кириллицу приводим к строчным. Заглавная буква сама по себе
+        # безобидна, но восстановление регистра после модели ломает
+        # транслитерацию: «Җирһл» давало J̌irγal — J с отдельным
+        # диакритическим знаком, которого нет в таблицах, и дальше запись
+        # для шрифта получалась другой, чем у «җирһл». Тодо бичиг
+        # прописных букв не знает, так что терять тут нечего.
+        out, stats = transliterate_with_stats(text.lower())
         res.steps_ms["модель"] = (time.perf_counter() - t0) * 1000
         res.stats.update(stats)
         return out
@@ -228,10 +233,11 @@ def process(text: str, target: str, options: Optional[ImageOptions] = None) -> R
 
         t0 = time.perf_counter()
         if opts.uses_rules:
-            from .clear_script import translit_to_font
+            from .clear_script import fit_to_font, translit_to_font
 
             source = res.translit or todo_to_translit(res.todo)
-            render_text = translit_to_font(source)
+            # запись общая для семейства, подгонка под начертание — своя
+            render_text = fit_to_font(translit_to_font(source), opts.font)
         else:
             render_text = res.todo
         # бирга и четыре точки — только для длинного текста

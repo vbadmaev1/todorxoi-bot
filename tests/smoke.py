@@ -285,6 +285,21 @@ async def main():
         check(bool(r.image_size) and r.image_size[0] > 0,
               f"картинка шрифтом {key}: {r.image_size}")
 
+    # Подгонка записи под начертание: отрезок стержня там, где буквы
+    # наезжают друг на друга, и двойной пробел между словами.
+    from core.clear_script import SPINE_MARK, WORD_SPACE, fit_to_font, gaps_for
+    rec = translit_to_font("teyimü")
+    check(rec == "тэйимю", f"тиим -> {rec}")
+    for key in FONT_FILES:
+        fitted = fit_to_font(rec, key)
+        check(SPINE_MARK in fitted, f"{key}: стержень удлинён — {fitted}")
+        check(gaps_for(key), f"{key}: таблица пар загрузилась")
+    spaced = fit_to_font(translit_to_font("eke ecege"), "clear")
+    check(WORD_SPACE in spaced and "  " in spaced,
+          f"слова разведены двойным пробелом: {spaced}")
+    check(fit_to_font(rec, "universal") == rec.replace(" ", WORD_SPACE),
+          "для неизвестного шрифта запись не ломается")
+
     # знаки препинания должны доезжать и до кириллической записи
     marked = add_punctuation(translit_to_font("eke, ecege. \u0101bu?"))
     check(marked.startswith("\u1800"), "бирга ставится и в этой записи")
@@ -317,6 +332,11 @@ async def main():
                       f"{key}: отступ у {title} {lsb} больше выноса {overhang}")
     except ImportError:
         print("  [--] fontTools не установлен, проверку глифов пропускаю")
+
+    print("\n4a5. Регистр кириллицы не меняет результат")
+    for pair in (("Җирһл", "җирһл"), ("Хальмг улс", "хальмг улс")):
+        big, small = (core.process(w, "todo").todo for w in pair)
+        check(big == small, f"{pair[0]} и {pair[1]} -> {big}")
 
     print("\n4b. Настройки картинки")
     await dp.feed_update(bot, msg("/settings"))
