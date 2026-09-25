@@ -154,10 +154,8 @@ async def any_text(
 
 @router.message(StateFilter(None), ~F.text)
 async def non_text(message: Message) -> None:
-    await message.answer(
-        "Я работаю только с текстом: пришлите калмыцкую кириллицу, "
-        "транслитерацию или тодо бичиг."
-    )
+    # фото и картинки файлом сюда не доходят — их забирает роутер ocr
+    await message.answer(texts.NON_TEXT)
 
 
 @router.callback_query(F.data.startswith(f"{keyboards.CB_CONVERT}:"))

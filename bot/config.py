@@ -43,6 +43,9 @@ class Config:
     jsonl_path: Path = BASE_DIR / "data" / "events.jsonl"
     model_path: Path = BASE_DIR / "model" / "translit_model.npz"
     font_path: Path = BASE_DIR / "assets" / "MongolianUniversalWhite.ttf"
+    ocr_model_path: Path = BASE_DIR / "model" / "todo_ocr_int8.onnx"
+    # в ответ на фото ещё и картинка с рамками столбцов (~50 мс и один JPEG)
+    ocr_overlay: bool = True
     admin_ids: list = field(default_factory=list)
     log_level: str = "INFO"
     warmup: bool = True
@@ -62,6 +65,7 @@ class Config:
             feedback_on_translit=_bool("FEEDBACK_ON_TRANSLIT", True),
             font_size=int(os.environ.get("FONT_SIZE", "64")),
             max_column_height=int(os.environ.get("MAX_COLUMN_HEIGHT", "900")),
+            ocr_overlay=_bool("OCR_OVERLAY", True),
         )
         if os.environ.get("DATA_DIR"):
             cfg.data_dir = Path(os.environ["DATA_DIR"]).expanduser().resolve()
@@ -75,11 +79,14 @@ class Config:
             cfg.model_path = Path(os.environ["MODEL_PATH"]).expanduser().resolve()
         if os.environ.get("FONT_PATH"):
             cfg.font_path = Path(os.environ["FONT_PATH"]).expanduser().resolve()
+        if os.environ.get("OCR_MODEL_PATH"):
+            cfg.ocr_model_path = Path(os.environ["OCR_MODEL_PATH"]).expanduser().resolve()
 
         # ядро читает эти пути из окружения — синхронизируем обратно,
         # чтобы core/ и bot/ точно смотрели в одно и то же место
         os.environ["MODEL_PATH"] = str(cfg.model_path)
         os.environ["FONT_PATH"] = str(cfg.font_path)
+        os.environ["OCR_MODEL_PATH"] = str(cfg.ocr_model_path)
 
         cfg.data_dir.mkdir(parents=True, exist_ok=True)
         cfg.db_path.parent.mkdir(parents=True, exist_ok=True)

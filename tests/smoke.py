@@ -13,6 +13,7 @@ Bot API заглушкой и скармливаем диспетчеру нас
 """
 
 import asyncio
+import io
 import os
 import sys
 import tempfile
@@ -33,7 +34,10 @@ from aiogram.fsm.storage.memory import MemoryStorage  # noqa: E402
 from aiogram.types import (  # noqa: E402
     CallbackQuery,
     Chat,
+    Document,
+    File,
     Message,
+    PhotoSize,
     Update,
     User,
 )
@@ -52,6 +56,7 @@ class FakeSession(BaseSession):
     def __init__(self):
         super().__init__()
         self.calls = []
+        self.files = {}   # file_id -> байты: то, что «лежит на серверах Telegram»
 
     async def close(self):
         pass
@@ -70,10 +75,15 @@ class FakeSession(BaseSession):
             )
         if name == "GetMe":
             return User(id=7, is_bot=True, first_name="bot", username="testbot")
+        if name == "GetFile":
+            data = self.files[method.file_id]
+            return File(file_id=method.file_id, file_unique_id=method.file_id,
+                        file_size=len(data), file_path=f"photos/{method.file_id}")
         return True
 
-    async def stream_content(self, *args, **kwargs):  # pragma: no cover
-        yield b""
+    async def stream_content(self, url, *args, **kwargs):
+        # бот скачивает файл по ссылке .../photos/<file_id>
+        yield self.files[url.rsplit("/", 1)[-1]]
 
     def last(self, kind=None):
         for name, method in reversed(self.calls):
@@ -99,6 +109,32 @@ def msg(text):
             chat=CHAT,
             from_user=USER,
             text=text,
+        ),
+    )
+
+
+def photo_message(file_id, data, caption=None):
+    return Message(
+        message_id=_next_id(),
+        date=datetime.now(timezone.utc),
+        chat=CHAT,
+        from_user=USER,
+        caption=caption,
+        photo=[PhotoSize(file_id=file_id, file_unique_id=file_id, width=800,
+                         height=600, file_size=len(data))],
+    )
+
+
+def doc_msg(file_id, file_name, mime_type):
+    return Update(
+        update_id=_next_id(),
+        message=Message(
+            message_id=_next_id(),
+            date=datetime.now(timezone.utc),
+            chat=CHAT,
+            from_user=USER,
+            document=Document(file_id=file_id, file_unique_id=file_id,
+                              file_name=file_name, mime_type=mime_type, file_size=100),
         ),
     )
 
@@ -457,6 +493,9 @@ async def main():
     _, m = session.last("SendMessage")
     check("Не знаю такой команды" in m.text, "неизвестная команда не уходит в перевод")
 
+    print("\n12. Фото → текст")
+    await _check_ocr(dp, bot, session, storage)
+
     storage.close()
     await bot.session.close()
 
@@ -465,6 +504,67 @@ async def main():
         print(f"❌ провалено проверок: {check.failed}")
         sys.exit(1)
     print("✅ все проверки прошли")
+
+
+async def _check_ocr(dp, bot, session, storage):
+    import difflib
+
+    from PIL import Image
+
+    import core
+    from core import ocr
+
+    try:
+        ocr.warmup()
+    except ocr.OcrUnavailable as exc:
+        check(False, f"распознавание фото доступно ({exc})")
+        return
+
+    # фото — картинка, которую рисует сам бот: круговой тест текст -> фото -> текст
+    sample = core.process("Һурвн сарин туршарт иим эрт босад йовхла, ноха хуцад", "image")
+    png = sample.pages[0][0].getvalue()
+    session.files["ph1"] = png
+    before = len(session.calls)
+    await dp.feed_update(bot, Update(update_id=_next_id(), message=photo_message("ph1", png)))
+    sent = [name for name, _ in session.calls[before:]]
+    name, m = session.last()
+    body = getattr(m, "caption", None) or getattr(m, "text", None) or ""
+    check("GetFile" in sent, "бот скачал присланное фото")
+    check("SendPhoto" in sent or "SendDocument" in sent, "пришла картинка с рамками столбцов")
+    check("Транслитерация" in body and "Тодо бичиг" in body, "в ответе транслитерация и тодо бичиг")
+    buttons = [b.text for row in m.reply_markup.inline_keyboard for b in row] if m.reply_markup else []
+    check("👍" in buttons, "под ответом есть 👍/👎")
+
+    with storage._lock:
+        row = dict(storage._conn.execute("SELECT * FROM requests ORDER BY id DESC LIMIT 1").fetchone())
+    check(row["target"] == "ocr" and row["input_text"] == "photo:ph1", "запрос записан в базу как ocr с file_id")
+    # в текстовом режиме запятая — вертикальная форма ︐, на картинке и у модели — ᠂
+    expected = sample.todo.replace("︐", "᠂")
+    got = (row["todo"] or "").replace("\n", " ")
+    ratio = difflib.SequenceMatcher(None, expected, got).ratio()
+    check(ratio > 0.95, f"распознанный текст совпадает с нарисованным ({ratio:.1%})")
+
+    before = len(session.calls)
+    reply = Message(message_id=_next_id(), date=datetime.now(timezone.utc), chat=CHAT,
+                    from_user=USER, text="/ocr", reply_to_message=photo_message("ph1", png))
+    await dp.feed_update(bot, Update(update_id=_next_id(), message=reply))
+    check(any(n == "GetFile" for n, _ in session.calls[before:]), "/ocr ответом на фото распознаёт его")
+
+    await dp.feed_update(bot, msg("/ocr"))
+    _, m = session.last("SendMessage")
+    check("Фото → текст" in m.text, "/ocr без фото объясняет, что прислать")
+
+    await dp.feed_update(bot, doc_msg("d1", "book.pdf", "application/pdf"))
+    _, m = session.last("SendMessage")
+    check("PDF" in m.text, "PDF — понятный отказ")
+
+    blank = Image.new("L", (800, 600), 255)
+    buf = io.BytesIO()
+    blank.save(buf, "PNG")
+    session.files["ph2"] = buf.getvalue()
+    await dp.feed_update(bot, Update(update_id=_next_id(), message=photo_message("ph2", buf.getvalue())))
+    _, m = session.last("SendMessage")
+    check("Не нашёл" in m.text or "Не разобрал" in m.text, "пустая картинка — понятная ошибка")
 
 
 if __name__ == "__main__":
