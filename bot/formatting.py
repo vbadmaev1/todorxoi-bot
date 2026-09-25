@@ -10,6 +10,7 @@ from . import texts
 TARGET_ICONS = {"translit": "🔤", "todo": "ᡐ", "image": "🖼"}
 
 CAPTION_LIMIT = 1024
+MESSAGE_LIMIT = 4096
 
 
 def fmt_ms(ms: float) -> str:
@@ -85,3 +86,46 @@ def _image_caption(res: Result, page: int = 1, pages: int = 1) -> str:
     if page == pages:
         blocks.append(timing_line(res))
     return "\n\n".join(blocks)
+
+
+def render_ocr(res) -> list:
+    """Ответ на фото: транслитерация и тодо бичиг, по строке на столбец.
+
+    Полная страница — это около 2000 символов на обе записи, почти всегда
+    одно сообщение. Если не влезает в лимит Telegram, режем по столбцам:
+    каждая часть — законченный блок <code>, чтобы копировать было удобно.
+    Возвращает список текстов сообщений."""
+    blocks = [f"📷 <b>Текст с фото</b> · столбцов: {len(res.columns)}"]
+    blocks += _code_blocks("Транслитерация:", res.translit_columns)
+    blocks += _code_blocks("Тодо бичиг:", res.columns)
+    if res.low_confidence:
+        blocks.append(texts.OCR_LOW_CONFIDENCE)
+    blocks.append(f"⏱ {fmt_ms(res.elapsed_ms)}")
+    return _pack(blocks, MESSAGE_LIMIT)
+
+
+def _code_blocks(title: str, lines: list, limit: int = 3500) -> list:
+    """Строки -> блоки «заголовок + <code>…</code>» не длиннее limit."""
+    chunks, cur = [], []
+    for line in lines:
+        if cur and len(escape("\n".join(cur + [line]))) > limit:
+            chunks.append(cur)
+            cur = []
+        cur.append(line)
+    chunks.append(cur)
+    blocks = []
+    for k, chunk in enumerate(chunks):
+        body = escape("\n".join(chunk))
+        blocks.append((title + "\n" if k == 0 else "") + f"<code>{body}</code>")
+    return blocks
+
+
+def _pack(blocks: list, limit: int) -> list:
+    """Блоки -> сообщения: подряд, пока влезает в limit."""
+    messages = []
+    for block in blocks:
+        if messages and len(messages[-1]) + 2 + len(block) <= limit:
+            messages[-1] += "\n\n" + block
+        else:
+            messages.append(block)
+    return messages

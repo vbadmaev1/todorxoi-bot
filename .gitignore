@@ -24,3 +24,6 @@ todo_output.png
 .DS_Store
 .idea/
 .vscode/
+
+# промежуточный fp32 от tools/export_ocr_onnx.py — боту не нужен
+model/*_fp32.onnx

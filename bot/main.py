@@ -27,6 +27,7 @@ COMMANDS = [
     BotCommand(command="translit", description="Кириллица → транслитерация"),
     BotCommand(command="todo", description="→ тодо бичиг"),
     BotCommand(command="image", description="→ картинка"),
+    BotCommand(command="ocr", description="Фото → текст"),
     BotCommand(command="mode", description="Текущий режим"),
     BotCommand(command="settings", description="Цвета и размер картинки"),
     BotCommand(command="help", description="Как работает бот"),
@@ -53,6 +54,18 @@ async def _warmup() -> None:
         log.info("модель прогрета: %s", model_info())
     except Exception:
         log.exception("прогрев модели не удался — бот продолжит работу")
+
+    # Распознавание фото — отдельная модель и отдельные зависимости
+    # (onnxruntime, scipy). Если их нет, бот работает, фото не читает.
+    from core import ocr
+
+    try:
+        info = await asyncio.to_thread(ocr.warmup)
+        log.info("распознавание фото готово: %s", info)
+    except ocr.OcrUnavailable as exc:
+        log.warning("распознавание фото недоступно: %s — текстовые режимы работают", exc)
+    except Exception:
+        log.exception("прогрев распознавания фото не удался — бот продолжит работу")
 
 
 def _check_shaping() -> None:
