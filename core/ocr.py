@@ -10,9 +10,10 @@ ocr.py — распознавание тодо бичиг с фото: карт�
      один поток. Как она получена из обученной — tools/export_ocr_onnx.py.
   3. Транслитерация — тем же todo_to_translit, что и в текстовых режимах;
      перед ней убираются висячие узкие пробелы, знаки — в латинские.
-  4. Картинка-проверка: выпрямленный исходник с рамками и номерами
-     столбцов. Видно, как бот разрезал страницу, и какая строка ответа
-     какому столбцу соответствует. Стоит ~50 мс и один JPEG.
+  4. Картинка-проверка: присланная картинка (выпрямленная, в своих цветах)
+     с рамками и номерами столбцов. Видно, как бот разрезал страницу, и
+     какая строка ответа какому столбцу соответствует. Стоит ~50 мс и один
+     JPEG.
 
 Всё синхронное и счётное — в боте звать через asyncio.to_thread и по одной
 картинке за раз (см. bot/handlers/ocr.py): модель с библиотеками держит
@@ -208,12 +209,17 @@ def warmup() -> dict:
 # ---------------------------------------------------------------- картинка
 
 def open_image(data: bytes) -> Image.Image:
+    """Байты -> картинка в цвете (L, RGB или RGBA). В серое её переводит
+    page_layout.to_gray: там решается, какой цвет текст, а какой фон."""
     try:
         im = Image.open(io.BytesIO(data))
         # JPEG можно декодировать сразу уменьшенным — быстрее и меньше памяти
-        im.draft("L", (MAX_SIDE, MAX_SIDE))
+        im.draft("RGB", (MAX_SIDE, MAX_SIDE))
         im = ImageOps.exif_transpose(im)        # фото с телефона, присланное файлом, бывает повёрнуто через EXIF
-        im = im.convert("L")
+        if "A" in im.mode or "transparency" in im.info:
+            im = im.convert("RGBA")
+        elif im.mode not in ("L", "RGB"):
+            im = im.convert("RGB")
     except Exception as exc:
         raise OcrError("Не получилось открыть картинку. Пришлите фото или файл PNG/JPG.") from exc
     if max(im.size) > MAX_SIDE:
@@ -229,9 +235,9 @@ def _font(size: int):
         return ImageFont.load_default()
 
 
-def draw_columns(gray: np.ndarray, boxes: list):
+def draw_columns(page: Image.Image, boxes: list):
     """Выпрямленная страница + рамки столбцов с номерами -> (JPEG, размер)."""
-    im = Image.fromarray(gray).convert("RGB")
+    im = page.convert("RGB")
     k = min(1.0, OVERLAY_SIDE / max(im.size))
     if k < 1.0:
         im = im.resize((round(im.width * k), round(im.height * k)), Image.LANCZOS)
@@ -296,7 +302,15 @@ def recognize(data: bytes, overlay: bool = True) -> OcrResult:
                     angle=dbg["angle"], steps_ms=steps)
     if overlay:
         t0 = time.perf_counter()
-        res.overlay, res.overlay_size = draw_columns(dbg["gray"], dbg["boxes"])
+        if img.mode == "RGBA":
+            # у прозрачной картинки цвет под прозрачностью случайный — показываем то, что видела модель
+            page = Image.fromarray(dbg["gray"])
+        else:
+            # рамки — на присланной картинке, в её цветах: так человек узнаёт своё фото
+            page = img if not dbg["angle"] else img.rotate(
+                dbg["angle"], Image.BICUBIC, expand=True,
+                fillcolor=255 if img.mode == "L" else (255, 255, 255))
+        res.overlay, res.overlay_size = draw_columns(page, dbg["boxes"])
         steps["рамки"] = (time.perf_counter() - t0) * 1000
     res.elapsed_ms = (time.perf_counter() - started) * 1000
     return res
