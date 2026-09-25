@@ -544,6 +544,22 @@ async def _check_ocr(dp, bot, session, storage):
     ratio = difflib.SequenceMatcher(None, expected, got).ratio()
     check(ratio > 0.95, f"распознанный текст совпадает с нарисованным ({ratio:.1%})")
 
+    # Цвет: раньше картинка переводилась в серое, а фоном считалось «то, что
+    # темнее 128 по краю». Жёлтое на оранжевом давало ореолы вместо букв,
+    # чёрное на синем — перевёрнутую маску, красное на зелёном — пустоту.
+    failed = []
+    for fg, bg in (("yellow", "orange"), ("black", "blue"), ("red", "green"),
+                   ("white", "black"), ("black", "transparent")):
+        pic = core.process("Һурвн сарин туршарт иим эрт босад", "image", core.ImageOptions(fg=fg, bg=bg))
+        try:
+            r = ocr.recognize(pic.pages[0][0].getvalue(), overlay=False)
+            got = r.todo.replace("\n", " ")
+        except ocr.OcrError:
+            got = ""
+        if difflib.SequenceMatcher(None, pic.todo, got).ratio() < 0.95:
+            failed.append(f"{fg} на {bg}")
+    check(not failed, "цветные картинки и прозрачный фон читаются" + (f" (не прочитались: {failed})" if failed else ""))
+
     before = len(session.calls)
     reply = Message(message_id=_next_id(), date=datetime.now(timezone.utc), chat=CHAT,
                     from_user=USER, text="/ocr", reply_to_message=photo_message("ph1", png))
