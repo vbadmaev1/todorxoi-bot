@@ -170,6 +170,22 @@ def stroke_width(ink):
     return float(np.median(runs)) if len(runs) else 3.0
 
 
+def text_stroke_width(ink, lab, area):
+    """Толщина штриха с поправкой на шум. Медиана по всем отрезкам (stroke_width) считает каждую пылинку
+    наравне с буквой: на фото крупного слова на фоне ткани тысячи точек фактуры дают 4 px при штрихе
+    букв в 40 px — и слово целиком уходило в «сплошные пятна» (solid_components) как стол вокруг страницы.
+    Поэтому то же самое считается ещё и по крупным компонентам (верхние 10% по площади); если выходит
+    вдвое толще — берём это. На страницах и сканах обе оценки совпадают, там ничего не меняется."""
+    s = stroke_width(ink)
+    if len(area) > 2:
+        big = area >= np.percentile(area[1:], 90)
+        big[0] = False
+        s_big = stroke_width(big[lab] & ink)
+        if s_big >= 2 * s:
+            return s_big
+    return s
+
+
 def speck_area(area, s):
     """Порог пыли. Точки у букв и знаков препинания в разных шрифтах от 0.15 до 0.8 s² (жирный шрифт — мелкие точки
     относительно штриха), поэтому порог — треть типичной точки на этой же картинке, а не доля от толщины штриха."""
@@ -377,12 +393,86 @@ def render_column(pieces, gray, pad):
     return Image.fromarray(out), (x0 - p, y0 - p, x1 + p, y1 + p)
 
 
+def _disk(r):
+    return np.hypot(*np.mgrid[-r:r + 1, -r:r + 1]) <= r
+
+
+def _close(mask, r):
+    """Замыкание кругом радиуса r через преобразование расстояний: то же, что binary_closing с _disk(r),
+    но за линейное время — у большого круга binary_closing на кадре идёт секундами."""
+    grown = ndi.distance_transform_edt(~np.pad(mask, r)) <= r
+    return (ndi.distance_transform_edt(grown) > r)[r:-r, r:-r]
+
+
+def find_plates(img, max_plates=6):
+    """Надпись на предмете: кулон, табличка, татуировка на руке, обложка на столе. -> [(картинка, рамка в img) ...].
+
+    split_page считает, что кадр — это страница. Когда надпись — лишь часть кадра, а фон пёстрый (ткань,
+    кожа дивана, цепочка), фон распадается на «чернила», полярность выбирается по нему, а сама поверхность
+    с надписью становится одним сплошным пятном с дырками-буквами — и выкидывается как стол вокруг страницы.
+
+    Здесь поверхность ищут именно как такое пятно:
+      1. глобальный порог Оцу по яркости, посчитанный на размытой медианой копии (мелкая фактура не
+         сдвигает порог); не binarize — её деление на местный фон превращает тени на коже в дырки;
+      2. обе полярности, размыкание кругом ~1/60 кадра — отрываются тонкие перемычки и фактура;
+      3. у пятна закрываются дырки (после замыкания кругом в 1/6 пятна — иначе буква у края,
+         открытая наружу, дыркой не считается); дырки — кандидаты в надпись, их должно быть
+         от 1 до 50% площади;
+      4. вырезается рамка вокруг дырок с запасом, всё вне пятна заливается его цветом, чтобы край
+         поверхности и фон не стали штрихами.
+    Лишнее (складки, соседний кусок фона) отсеивает уже модель по уверенности — см. core/ocr.py."""
+    rgb = img.convert("RGB")
+    k = min(1.0, 600 / max(rgb.size))
+    small = rgb.resize((max(1, round(rgb.width * k)), max(1, round(rgb.height * k))), Image.BILINEAR)
+    g = np.asarray(small.convert("L"))
+    r = max(2, round(min(g.shape) / 60))
+    t = _otsu(ndi.median_filter(g, size=2 * r + 1))
+    found = []
+    for mask in (g > t, g <= t):
+        lab, _ = ndi.label(ndi.binary_opening(mask, _disk(r)))
+        area = np.bincount(lab.ravel())
+        for i, sl in enumerate(ndi.find_objects(lab), 1):
+            if sl is None or not 0.005 * lab.size <= area[i] <= 0.7 * lab.size:
+                continue
+            comp = lab[sl] == i
+            R = max(2, round(min(comp.shape) / 6))
+            closed = ndi.binary_fill_holes(_close(comp, R)) | comp
+            hl, _ = ndi.label(closed & ~comp)
+            ha = np.bincount(hl.ravel())
+            ha[0] = 0
+            if not 0.01 * closed.sum() <= ha.sum() <= 0.5 * closed.sum():
+                continue
+            ys, xs = np.nonzero((ha >= max(4, 0.02 * ha.max()))[hl])   # крошки не раздвигают рамку
+            found.append((int(ha.sum()), sl, closed, (ys.min(), ys.max() + 1, xs.min(), xs.max() + 1)))
+    arr = np.asarray(rgb)
+    out = []
+    for _, sl, closed, (hy0, hy1, hx0, hx1) in sorted(found, key=lambda f: -f[0])[:max_plates]:
+        mg = round(0.15 * max(hx1 - hx0, (hy1 - hy0) / 8))
+        hy0, hx0 = max(0, hy0 - mg), max(0, hx0 - mg)
+        hy1, hx1 = min(closed.shape[0], hy1 + mg), min(closed.shape[1], hx1 + mg)
+        oy, ox = sl[0].start, sl[1].start
+        x0, y0 = round((ox + hx0) / k), round((oy + hy0) / k)
+        x1, y1 = min(rgb.width, round((ox + hx1) / k)), min(rgb.height, round((oy + hy1) / k))
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            continue
+        # маска поверхности в полном разрешении, чуть уже — чтобы её кромка не стала штрихом
+        m = np.asarray(Image.fromarray(closed[hy0:hy1, hx0:hx1].astype(np.uint8) * 255)
+                       .resize((x1 - x0, y1 - y0), Image.BILINEAR)) > 127
+        m = ndi.binary_erosion(m, iterations=max(1, round(0.03 * min(m.shape))))
+        if not m.any():
+            continue
+        crop = arr[y0:y1, x0:x1]
+        fill = np.median(crop[m], axis=0).astype(np.uint8)
+        out.append((Image.fromarray(np.where(m[..., None], crop, fill)), (x0, y0, x1, y1)))
+    return out
+
+
 def split_page(img, pad=0.1, deskew=True, debug=False):
     """Страница (PIL) -> [столбец PIL ...] слева направо. debug=True -> (столбцы, словарь с промежуточными данными)."""
     ink, gray = binarize(img)
-    s = stroke_width(ink)
     lab, _ = ndi.label(ink, structure=_EIGHT)
     area = np.bincount(lab.ravel())
+    s = text_stroke_width(ink, lab, area)
     keep = (area >= speck_area(area[1:], s)) & ~solid_components(lab, ink, s)
     ink = keep[lab] & ink                                         # пылинки и сплошные пятна
     angle = 0.0                                                   # на сколько повернули на самом деле

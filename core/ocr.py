@@ -23,6 +23,7 @@ ocr.py — распознавание тодо бичиг с фото: карт�
 
 import io
 import json
+import math
 import os
 import re
 import threading
@@ -54,6 +55,14 @@ OVERLAY_SIDE = 1600
 # страницы той же книги — почти всегда ни одной буквы, а где что-то нашлось,
 # 0.43–0.93 (0.93 — одна буква на всю страницу, её ловит MIN_LETTERS).
 LOW_CONFIDENCE = 0.9
+# Слово на краю столбца с надписи на предмете с медианной уверенностью ниже
+# этого — не текст, а складка, фон или отверстие (см. trim_unsure). Настоящие
+# слова на фото кулона и татуировки: 1.0; мусор: 0.52–0.88.
+UNSURE_WORD = 0.9
+# С вырезки на фото предмета меньше букв не принимаем: после обрезки
+# неуверенного от складок и узоров остаются уверенные огрызки в 1–2 буквы
+# («xa» с кирпичной стены), а настоящая надпись — хотя бы слово.
+PLATE_MIN_LETTERS = 3
 # Меньше букв на всю картинку — считаем, что тодо бичиг на ней нет.
 MIN_LETTERS = 2
 
@@ -147,11 +156,13 @@ class Model:
         self.img_h = int(meta["img_h"])
         self.path = path
 
-    def read(self, columns: list):
-        """-> (строки, средняя уверенность по всем непустым шагам)."""
+    def read(self, columns: list, char_probs: bool = False):
+        """-> (строки, средняя уверенность по всем непустым шагам)
+        или, с char_probs, (строки, уверенность, [уверенности символов строки ...])."""
         lines = [column_line(c, self.img_h) for c in columns]
         order = np.argsort([a.shape[1] for a in lines])   # близкие по ширине — в один батч
         texts = [""] * len(lines)
+        probs = [[] for _ in lines]
         conf_sum, conf_n = 0.0, 0
         for k in range(0, len(order), MAX_BATCH):
             idx = order[k:k + MAX_BATCH]
@@ -167,9 +178,11 @@ class Model:
                 keep = (best != 0) & np.concatenate([[True], best[1:] != best[:-1]])
                 texts[i] = "".join(self.chars[c - 1] for c in best[keep])
                 p = np.exp(steps - steps.max(-1, keepdims=True))
-                p = (p / p.sum(-1, keepdims=True)).max(-1)[best != 0]
-                conf_sum += float(p.sum()); conf_n += len(p)
-        return texts, (conf_sum / conf_n if conf_n else 0.0)
+                p = (p / p.sum(-1, keepdims=True)).max(-1)
+                probs[i] = p[keep].tolist()
+                conf_sum += float(p[best != 0].sum()); conf_n += int((best != 0).sum())
+        conf = conf_sum / conf_n if conf_n else 0.0
+        return (texts, conf, probs) if char_probs else (texts, conf)
 
 
 _model: Optional[Model] = None
@@ -196,6 +209,60 @@ def _split_page():
     except ImportError as exc:                   # разметке нужен scipy
         raise OcrUnavailable(f"не хватает зависимости: {exc.name}") from exc
     return split_page
+
+
+def trim_unsure(text: str, probs: list):
+    """Столбец с надписи на предмете -> (текст без неуверенных слов по краям, уверенности его букв);
+    ("", []) — если неуверен весь.
+
+    На странице всё в кадре — текст. На фото предмета в вырезку попадают складки кожи, кусок фона,
+    отверстие под цепочку, и модель читает их как короткие «слова» по краям столбца или как
+    отдельный столбец. Настоящие буквы она видит с уверенностью ~1.0, такие — 0.5–0.9. Судим по
+    медиане слова: одна сомнительная буква посреди уверенного слова его не выкидывает."""
+    words, cur = [], []
+    for ch, p in zip(text, probs):
+        if ch == " ":
+            if cur:
+                words.append(cur); cur = []
+        else:
+            cur.append((ch, p))
+    if cur:
+        words.append(cur)
+    sure = [float(np.median([p for _, p in w])) >= UNSURE_WORD for w in words]
+    while words and not sure[0]:
+        words.pop(0); sure.pop(0)
+    while words and not sure[-1]:
+        words.pop(); sure.pop()
+    while words and all(ch in _GAP for ch, _ in words[0]):
+        words.pop(0)
+    while words and words[-1] and words[-1][-1][0] in _GAP and words[-1][-1][1] < UNSURE_WORD:
+        words[-1].pop()                                           # «︕» из складки, прилипший к последнему слову
+        if not words[-1]:
+            words.pop()
+    return " ".join("".join(ch for ch, _ in w) for w in words), [p for w in words for _, p in w]
+
+
+def _read_page(page, split_page, model, trim=False):
+    """Картинка -> (столбцы тодо, уверенность, число букв, отладка разметки) или None, если столбцов нет.
+    trim — надпись на предмете: неуверенные слова по краям и неуверенные столбцы убираются."""
+    cols, dbg = split_page(page, debug=True)
+    if not cols:
+        return None
+    todo, confidence, probs = model.read(cols, char_probs=True)
+    if trim:
+        kept = [trim_unsure(t, p) + (box,) for t, p, box in zip(todo, probs, dbg["boxes"])]
+        kept = [k for k in kept if k[0]]
+        todo, dbg["boxes"] = [t for t, _, _ in kept], [box for _, _, box in kept]
+        left = [q for _, p, _ in kept for q in p]                  # уверенность — по тому, что осталось
+        confidence = float(np.mean(left)) if left else 0.0
+    todo = [tidy(c) for c in todo]
+    letters = sum(ch not in _NOT_LETTERS for t in todo for ch in t)
+    return todo, confidence, letters, dbg
+
+
+def _rank(r):
+    """Какое прочтение лучше: сначала то, где есть буквы, потом — где модель увереннее."""
+    return (-1, 0.0) if r is None else (int(r[2] >= MIN_LETTERS), r[1])
 
 
 def warmup() -> dict:
@@ -276,19 +343,28 @@ def recognize(data: bytes, overlay: bool = True) -> OcrResult:
     steps["картинка"] = (time.perf_counter() - t0) * 1000
 
     t0 = time.perf_counter()
-    cols, dbg = split_page(img, debug=True)
-    steps["разметка"] = (time.perf_counter() - t0) * 1000
-    if not cols:
+    best = _read_page(img, split_page, model)
+    plate_box = None
+    steps["разметка и модель"] = (time.perf_counter() - t0) * 1000
+    if best is None or best[2] < MIN_LETTERS or best[1] < LOW_CONFIDENCE:
+        # Не страница во весь кадр, а надпись на предмете (кулон, табличка) на пёстром фоне:
+        # ищем табличку и читаем её отдельно; берём, что прочиталось лучше.
+        t0 = time.perf_counter()
+        from .page_layout import find_plates
+        for plate, box in find_plates(img):
+            r = _read_page(plate, split_page, model, trim=True)
+            if r is not None and r[2] < PLATE_MIN_LETTERS:
+                continue
+            if _rank(r) > _rank(best):
+                best, plate_box = r, (box, plate.size)
+        steps["поиск таблички"] = (time.perf_counter() - t0) * 1000
+    if best is None:
         raise OcrError(
             "Не нашёл на картинке вертикального текста. Пришлите фото, где "
             "столбцы тодо бичиг идут сверху вниз."
         )
-
-    t0 = time.perf_counter()
-    todo, confidence = model.read(cols)
-    todo = [tidy(c) for c in todo]
-    steps["модель"] = (time.perf_counter() - t0) * 1000
-    if sum(ch not in _NOT_LETTERS for t in todo for ch in t) < MIN_LETTERS:
+    todo, confidence, letters, dbg = best
+    if letters < MIN_LETTERS:
         raise OcrError(
             "Не разобрал на картинке тодо бичиг. Нужно фото, где столбцы идут "
             "сверху вниз, а буквы крупные и чёткие."
@@ -302,15 +378,33 @@ def recognize(data: bytes, overlay: bool = True) -> OcrResult:
                     angle=dbg["angle"], steps_ms=steps)
     if overlay:
         t0 = time.perf_counter()
-        if img.mode == "RGBA":
+        if plate_box is not None:
+            # рамки — на присланном фото: столбцы из выпрямленной вырезки переводим
+            # обратно (поворот вокруг центра, сдвиг вырезки)
+            (px0, py0, _, _), (pw, ph) = plate_box
+            gh, gw = dbg["gray"].shape
+            t = math.radians(dbg["angle"])
+            c, s_ = math.cos(t), math.sin(t)
+
+            def back(x, y):
+                x, y = x - gw / 2, y - gh / 2
+                return px0 + x * c - y * s_ + pw / 2, py0 + x * s_ + y * c + ph / 2
+
+            boxes = []
+            for x0, y0, x1, y1 in dbg["boxes"]:
+                pts = [back(x, y) for x in (x0, x1) for y in (y0, y1)]
+                boxes.append((min(p[0] for p in pts), min(p[1] for p in pts), max(p[0] for p in pts), max(p[1] for p in pts)))
+            res.overlay, res.overlay_size = draw_columns(img, boxes)
+        elif img.mode == "RGBA":
             # у прозрачной картинки цвет под прозрачностью случайный — показываем то, что видела модель
             page = Image.fromarray(dbg["gray"])
+            res.overlay, res.overlay_size = draw_columns(page, dbg["boxes"])
         else:
             # рамки — на присланной картинке, в её цветах: так человек узнаёт своё фото
             page = img if not dbg["angle"] else img.rotate(
                 dbg["angle"], Image.BICUBIC, expand=True,
                 fillcolor=255 if img.mode == "L" else (255, 255, 255))
-        res.overlay, res.overlay_size = draw_columns(page, dbg["boxes"])
+            res.overlay, res.overlay_size = draw_columns(page, dbg["boxes"])
         steps["рамки"] = (time.perf_counter() - t0) * 1000
     res.elapsed_ms = (time.perf_counter() - started) * 1000
     return res
