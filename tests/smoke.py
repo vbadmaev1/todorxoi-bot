@@ -560,6 +560,25 @@ async def _check_ocr(dp, bot, session, storage):
             failed.append(f"{fg} на {bg}")
     check(not failed, "цветные картинки и прозрачный фон читаются" + (f" (не прочитались: {failed})" if failed else ""))
 
+    # Надпись на предмете: светлая табличка посреди тёмной пёстрой ткани. Без
+    # поиска таблички фон шёл за чернила, а сама табличка — за стол вокруг
+    # страницы, и надпись пропадала вместе с ней.
+    from PIL import Image
+    import numpy as np
+    pic = core.process("Һурвн сарин", "image")
+    plate = Image.open(pic.pages[0][0]).convert("RGB")
+    rng = np.random.default_rng(0)
+    cloth = (rng.random((plate.height * 3, plate.width * 5)) < 0.5) * 90 + 20
+    photo = Image.fromarray(np.repeat(cloth[..., None], 3, 2).astype(np.uint8))
+    photo.paste(plate, (2 * plate.width, plate.height))
+    buf = io.BytesIO(); photo.save(buf, "PNG")
+    try:
+        got = ocr.recognize(buf.getvalue(), overlay=False).todo.replace("\n", " ")
+    except ocr.OcrError:
+        got = ""
+    ratio = difflib.SequenceMatcher(None, pic.todo, got).ratio()
+    check(ratio > 0.95, f"табличка на пёстром фоне читается без обрезки ({ratio:.1%})")
+
     before = len(session.calls)
     reply = Message(message_id=_next_id(), date=datetime.now(timezone.utc), chat=CHAT,
                     from_user=USER, text="/ocr", reply_to_message=photo_message("ph1", png))
