@@ -70,6 +70,7 @@ _BOX_COLORS = ((230, 40, 40), (30, 110, 235))   # соседние столбц�
 
 _GAP = " ᠂᠃︱︖︕"                  # пробел и знаки препинания из алфавита модели
 _NOT_LETTERS = set(_GAP + "\u202f")
+_LONG_VOWEL = "\u1843"             # знак долготы: сам по себе не буква (в транслитерации «:»)
 # Узкий неразрывный пробел (U+202F) отделяет суффикс и стоит между буквами.
 # Рядом с пробелом или знаком он смысла не имеет, а модель ставит его на
 # широких промежутках между словами (в книгах столбцы выключены по высоте,
@@ -242,6 +243,14 @@ def trim_unsure(text: str, probs: list):
     return " ".join("".join(ch for ch, _ in w) for w in words), [p for w in words for _, p in w]
 
 
+def _junk_column(text: str, probs: list) -> bool:
+    """Столбец, который не текст: на фото здания или улицы край стены, рама окна, перила тоже дают
+    «столбцы». Модель читает их как 0–2 знака: «—», «:::m», «no,» — и если букв две, то неуверенно.
+    Настоящее короткое слово из двух букв она видит уверенно, его не трогаем."""
+    p = [q for ch, q in zip(text, probs) if ch not in _NOT_LETTERS and ch != _LONG_VOWEL]
+    return len(p) < 2 or (len(p) < 3 and float(np.median(p)) < UNSURE_WORD)
+
+
 def _read_page(page, split_page, model, trim=False):
     """Картинка -> (столбцы тодо, уверенность, число букв, отладка разметки) или None, если столбцов нет.
     trim — надпись на предмете: неуверенные слова по краям и неуверенные столбцы убираются."""
@@ -249,6 +258,13 @@ def _read_page(page, split_page, model, trim=False):
     if not cols:
         return None
     todo, confidence, probs = model.read(cols, char_probs=True)
+    keep = [not _junk_column(t, p) for t, p in zip(todo, probs)]
+    if not all(keep):
+        todo = [t for t, k in zip(todo, keep) if k]
+        probs = [p for p, k in zip(probs, keep) if k]
+        dbg["boxes"] = [b for b, k in zip(dbg["boxes"], keep) if k]
+        left = [q for p in probs for q in p]                      # уверенность — по тому, что осталось
+        confidence = float(np.mean(left)) if left else 0.0
     if trim:
         kept = [trim_unsure(t, p) + (box,) for t, p, box in zip(todo, probs, dbg["boxes"])]
         kept = [k for k in kept if k[0]]

@@ -207,6 +207,20 @@ def solid_components(lab, ink, s):
     mean_run = area / np.maximum(runs, 1)
     solid = (mean_run > 5 * s) & (area > 20 * s * s)
     solid[0] = False
+    # Но толщину s задаёт самый частый шрифт: на афише рядом с мелкой кириллицей крупная каллиграфия
+    # тодо бичиг — «пятно» по этому правилу. Пятна, ради которых оно заведено, либо касаются края
+    # кадра, либо тянутся через большую его часть, либо залиты сплошь (отрезок во всю ширину);
+    # слово — ни то, ни другое, ни третье.
+    H, W = lab.shape
+    objs = ndi.find_objects(lab)
+    for i in np.flatnonzero(solid):
+        sy, sx = objs[i - 1]
+        h, w = sy.stop - sy.start, sx.stop - sx.start
+        edge = sy.start == 0 or sx.start == 0 or sy.stop == H or sx.stop == W
+        wide = h >= 0.6 * H or w >= 0.6 * W
+        filled = mean_run[i] >= 0.5 * w
+        if not (edge or wide or filled):
+            solid[i] = False
     return solid
 
 
@@ -237,6 +251,20 @@ def _has_spine(ink, x, s):
     return bool(len(runs)) and runs.max() >= 3 * s
 
 
+def _spine_profile(ink, s):
+    """Сколько в каждом x пикселей из вертикальных серий чернил длиннее трёх штрихов (стержни, края)."""
+    col = np.pad(ink, ((1, 1), (0, 0))).astype(np.int8)
+    d = np.diff(col, axis=0)
+    out = np.zeros(ink.shape[1], np.float32)
+    ys, xs = np.nonzero(d == 1)
+    ye, xe = np.nonzero(d == -1)                                  # в каждом x начала и концы идут парами по порядку
+    o1, o2 = np.lexsort((ys, xs)), np.lexsort((ye, xe))
+    L = ye[o2] - ys[o1]
+    long = L >= 3 * s
+    np.add.at(out, xs[o1][long], L[long])
+    return out
+
+
 def find_cuts(ink, s):
     """x-координаты границ между столбцами (по минимумам проекции между стержнями)."""
     prof = ndi.uniform_filter1d(ink.sum(0).astype(np.float32), size=max(3, int(round(s))))
@@ -255,11 +283,26 @@ def find_cuts(ink, s):
     tall = (props["prominences"] >= 0.3 * top) & (props["peak_heights"] >= 0.25 * top)
     apart = props["prominences"] >= 0.5 * props["peak_heights"]
     peaks = peaks[tall | (apart & np.array([_has_spine(ink, x, s) for x in peaks], bool))]
-    cuts = []
+    cuts, spines = [], None
     for a, b in zip(peaks[:-1], peaks[1:]):
         x = a + int(np.argmin(prof[a:b]))
         if prof[x] <= 0.3 * min(prof[a], prof[b]):              # настоящий промежуток, а не провал внутри столбца
             cuts.append(x)
+            continue
+        # На фото поперёк кадра идут тонкие линии (края крыши, перила), и промежуток до нуля не падает;
+        # а мелкий пик рядом (угол здания) делает провал «неглубоким» относительно себя. Но полоса шире
+        # трёх штрихов совсем без стержней — вертикальных серий чернил длиннее трёх штрихов — не столбец:
+        # у столбца тодо бичиг стержень идёт через всю высоту. Режем в самом пустом месте такой полосы.
+        if spines is None:
+            spines = _spine_profile(ink, s)
+        low = np.concatenate([[0], (spines[a:b] == 0).astype(np.int8), [0]])
+        d = np.diff(low)
+        starts, ends = np.flatnonzero(d == 1), np.flatnonzero(d == -1)
+        if len(starts):
+            i = int(np.argmax(ends - starts))
+            if ends[i] - starts[i] >= 3 * s:
+                x0, x1 = a + starts[i], a + ends[i]
+                cuts.append(x0 + int(np.argmin(prof[x0:x1])))
     return cuts
 
 
@@ -467,6 +510,44 @@ def find_plates(img, max_plates=6):
     return out
 
 
+def horizontal_text(lab, n):
+    """-> bool по меткам: компоненты, из которых сложены горизонтальные строки — кириллица, латиница, цифры
+    на афише, вывеске, обложке рядом с надписью тодо бичиг. Такие строки давали свои пики в проекции,
+    сбивали толщину штриха (у мелкого шрифта он тоньше) и срастались со столбцами тодо в один «столбец».
+
+    Буква горизонтального письма — отдельное пятно, не вытянутое вверх; буквы одного кегля стоят рядом
+    в длинный ряд. Слово тодо бичиг — одно высокое пятно, а его точки и знаки идут друг под другом.
+    Поэтому: пятна не выше полутора ширин разбиваются по классам высоты (с перекрытием, чтобы строка из
+    заглавных и строчных не рвалась), в каждом классе расширяются вбок на свою высоту; ряд шире шести
+    своих высот из хотя бы четырёх пятен — строка."""
+    sl = ndi.find_objects(lab)
+    h = np.array([0] + [s[0].stop - s[0].start if s else 0 for s in sl]); w = np.array([0] + [s[1].stop - s[1].start if s else 0 for s in sl])
+    cand = (h >= 4) & (h <= 1.5 * w + 2)                     # не вытянутые вверх
+    out = np.zeros(n + 1, bool)
+    if not cand.any():
+        return out
+    lo = h[cand].min()
+    b = 0
+    while lo * 2 ** b <= h[cand].max():
+        # класс высоты [lo·2^b, lo·2^(b+2)) — перекрываются, чтобы строка из букв разной высоты не рвалась
+        sel = cand & (h >= lo * 2 ** b) & (h < lo * 2 ** (b + 2))
+        b += 1
+        if sel.sum() < 4:
+            continue
+        hc = float(np.median(h[sel]))
+        m = sel[lab]
+        k = max(2, int(round(1.0 * hc)))
+        rl, _ = ndi.label(ndi.binary_dilation(m, structure=np.ones((1, 2 * k + 1), bool)))
+        for j, s_ in enumerate(ndi.find_objects(rl), 1):
+            if s_ is None:
+                continue
+            rh, rw = s_[0].stop - s_[0].start, s_[1].stop - s_[1].start
+            comps = np.unique(lab[s_][(rl[s_] == j) & m[s_]])
+            comps = comps[comps > 0]
+            if rw >= 6 * rh and len(comps) >= 4:
+                out[comps] = True
+    return out
+
 def split_page(img, pad=0.1, deskew=True, debug=False):
     """Страница (PIL) -> [столбец PIL ...] слева направо. debug=True -> (столбцы, словарь с промежуточными данными)."""
     ink, gray = binarize(img)
@@ -474,6 +555,10 @@ def split_page(img, pad=0.1, deskew=True, debug=False):
     area = np.bincount(lab.ravel())
     s = text_stroke_width(ink, lab, area)
     keep = (area >= speck_area(area[1:], s)) & ~solid_components(lab, ink, s)
+    horiz = horizontal_text(lab, len(area) - 1)
+    if area[horiz].sum() < 0.5 * area[1:].sum():                 # строки рядом с тодо бичиг (афиша, вывеска);
+        keep &= ~horiz                                            # а страницу, где их большинство, не трогаем:
+                                                                  # из обрывков русской страницы модель склеит мусор
     ink = keep[lab] & ink                                         # пылинки и сплошные пятна
     angle = 0.0                                                   # на сколько повернули на самом деле
     if deskew:
