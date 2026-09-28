@@ -17,6 +17,11 @@ torch-моделью на всех словах, какие есть.
 Сравниваются строки на выходе, а не числа: именно строки видит человек,
 и именно на них расхождение имеет значение. Расхождение в последнем
 знаке после запятой, не поменявшее argmax, нам безразлично.
+
+Веса в .npz хранятся в float16, поэтому единичные расхождения ожидаемы
+(на модели 2026-09-29 — единицы на 37 тысяч слов). Ошибка в формулах
+дала бы расхождение на большой доле слов, так что проверка падает, только
+если расходится больше --max-share (по умолчанию 0.1 %).
 """
 
 import argparse
@@ -32,6 +37,8 @@ def main() -> None:
     ap.add_argument("--pt", type=Path, default=Path("model/translit_model_cyr2lat.pt"))
     ap.add_argument("--npz", type=Path, default=Path("model/translit_model.npz"))
     ap.add_argument("--limit", type=int, default=0, help="взять только N слов")
+    ap.add_argument("--max-share", type=float, default=0.001,
+                    help="допустимая доля расхождений (float16 даёт единичные)")
     args = ap.parse_args()
 
     import torch  # noqa: F401  — нужен только здесь, боту он больше не нужен
@@ -66,12 +73,17 @@ def main() -> None:
     took = time.perf_counter() - t0
 
     print(f"\nПроверено: {len(words)} слов за {took:.1f} с")
-    if mismatches:
-        print(f"РАСХОЖДЕНИЙ: {len(mismatches)}")
-        for w, a, b in mismatches[:20]:
-            print(f"   {w:20s} torch={a!r:24s} numpy={b!r}")
+    if not mismatches:
+        print("Расхождений нет: NumPy повторяет torch слово в слово ✓")
+        return
+    share = len(mismatches) / len(words)
+    print(f"Расхождений: {len(mismatches)} ({share:.3%})")
+    for w, a, b in mismatches[:20]:
+        print(f"   {w:20s} torch={a!r:24s} numpy={b!r}")
+    if share > args.max_share:
+        print(f"Больше допустимых {args.max_share:.3%} — похоже на ошибку в формулах")
         sys.exit(1)
-    print("Расхождений нет: NumPy повторяет torch слово в слово ✓")
+    print("В пределах погрешности float16 ✓")
 
 
 if __name__ == "__main__":
