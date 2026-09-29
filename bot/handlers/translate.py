@@ -21,7 +21,7 @@ from .. import formatting, keyboards, texts
 from ..config import Config
 from ..state import get_mode
 from ..storage import Storage
-from .settings import load_options
+from .settings import load_fix_letters, load_options
 
 log = logging.getLogger(__name__)
 router = Router(name="translate")
@@ -57,9 +57,10 @@ async def handle_text(
     options = None
     if target == core.TARGET_IMAGE and user:
         options = await load_options(storage, user.id)
+    fix_letters = bool(user) and await load_fix_letters(storage, user.id)
 
     try:
-        res = await asyncio.to_thread(core.process, text, target, options)
+        res = await asyncio.to_thread(core.process, text, target, options, fix_letters)
     except core.PipelineError as exc:
         await storage.save_request(ok=False, error=str(exc), **base)
         await message.answer(f"⚠️ {exc}")
@@ -77,6 +78,7 @@ async def handle_text(
         elapsed_ms=res.elapsed_ms,
         steps=res.steps_ms,
         ok=True,
+        letters=_letters_log(res, fix_letters),
         **base,
     )
 
@@ -87,6 +89,14 @@ async def handle_text(
         await _send_image(message, res, markup)
     else:
         await message.answer(formatting.render_result(res), reply_markup=markup)
+
+
+def _letters_log(res, enabled: bool):
+    """Что записать в БД про калмыцкие буквы: по этим записям потом
+    калибруются пороги core/fix_letters.py на настоящих запросах."""
+    if not (res.letters_flag or res.letter_fixes):
+        return None
+    return {"enabled": enabled, "flag": res.letters_flag, "fixes": res.letter_fixes}
 
 
 async def _send_image(message: Message, res, markup) -> None:

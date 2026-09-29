@@ -158,6 +158,11 @@ def cb(data, message_id=1001):
     )
 
 
+def max_request_id(storage):
+    with storage._lock:
+        return storage._conn.execute("SELECT MAX(id) FROM requests").fetchone()[0]
+
+
 def check(condition, label):
     mark = "OK " if condition else "FAIL"
     print(f"  [{mark}] {label}")
@@ -415,7 +420,8 @@ async def main():
     print("\n4b. Настройки картинки")
     await dp.feed_update(bot, msg("/settings"))
     _, m = session.last("SendMessage")
-    check("Настройки картинки" in m.text, "/settings показывает текущие настройки")
+    check("Цвет текста" in m.text and "Исправлять: <b>не трогать</b>" in m.text,
+          "/settings показывает текущие настройки, исправление букв выключено")
 
     await dp.feed_update(bot, cb("set:set:bg:transparent"))
     saved = await storage.get_settings(USER.id)
@@ -435,6 +441,53 @@ async def main():
     await dp.feed_update(bot, cb("set:reset:-"))
     saved = await storage.get_settings(USER.id)
     check(not saved, "сброс настроек очищает запись")
+
+    print("\n4c. Текст без калмыцких букв")
+    from core.fix_letters import fix_text
+
+    for wrong, right in [
+        ("Сян бяянт!", "Сән бәәнт!"),
+        ("Та сяяняр хальмгаhар келнят", "Та сәәнәр хальмгаһар келнәт"),
+        ("Увлэс эрул менд hарвт", "Үвләс эрүл менд һарвт"),
+        ("Асхн тёвкнюн болтха!", "Асхн төвкнүн болтха!"),
+        ("Хальмг Тангч", "Хальмг Таңһч"),
+    ]:
+        got = fix_text(wrong).text
+        check(got == right, f"{wrong} -> {got}")
+    for ok_text in [
+        "Хальмг улс",
+        "Сул цаган шатр наадҗ давулдмн.",   # цаган — настоящее слово, не цаһан
+        "Цаһан сарар йөрәҗәнәв!",
+        "Привет, как дела? Это обычный русский текст.",
+    ]:
+        r = fix_text(ok_text)
+        check(r.text == ok_text and not r.detection.flag, f"не тронут: {ok_text}")
+
+    await dp.feed_update(bot, msg("/translit Сян бяянт, мана энкр бичкдуд"))
+    _, m = session.last("SendMessage")
+    check("/settings" in m.text and "Вернул" not in m.text,
+          "исправление выключено: только подсказка про /settings")
+
+    await dp.feed_update(bot, cb("set:toggle:fix_letters"))
+    saved = await storage.get_settings(USER.id)
+    check(saved.get("fix_letters") == "on", "исправление букв включается в /settings")
+
+    await dp.feed_update(bot, msg("Сян бяянт, мана энкр бичкдуд"))
+    _, m = session.last("SendMessage")
+    check("Вернул калмыцкие буквы" in m.text and "бяянт → бәәнт" in m.text,
+          "исправление включено: в ответе видно, что поменялось")
+    row = await storage.get_request(max_request_id(storage))
+    check('"enabled": true' in (row["letters_json"] or ""), "исправления записаны в БД")
+
+    await dp.feed_update(bot, msg("Хальмг улс"))
+    _, m = session.last("SendMessage")
+    check("Вернул" not in m.text and "/settings" not in m.text,
+          "правильный текст — без исправлений и подсказок")
+
+    await dp.feed_update(bot, cb("set:toggle:fix_letters"))
+    saved = await storage.get_settings(USER.id)
+    check(saved.get("fix_letters") == "off", "и выключается обратно")
+    await dp.feed_update(bot, cb("set:reset:-"))
 
     print("\n5. Фидбэк: 👍")
     row = await storage.get_request(1)

@@ -26,11 +26,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from bot.storage import _SCHEMA  # noqa: E402
+from bot.storage import _SCHEMA, Storage  # noqa: E402
 
 REQUEST_FIELDS = [
     "created_at", "user_id", "username", "chat_id", "target", "source_script",
     "input_text", "translit", "todo", "elapsed_ms", "steps_json", "ok", "error",
+    "letters_json",
 ]
 FEEDBACK_FIELDS = [
     "request_id", "created_at", "user_id", "username", "rating", "correction",
@@ -41,6 +42,12 @@ def restore(jsonl_path: Path, db_path: Path) -> dict:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.executescript(_SCHEMA)
+    # база могла быть заведена старой версией — без новых колонок
+    for sql in Storage._MIGRATIONS:
+        try:
+            conn.execute(sql)
+        except sqlite3.OperationalError:
+            pass
 
     counts = {"requests": 0, "feedback": 0, "skipped": 0, "broken": 0}
 

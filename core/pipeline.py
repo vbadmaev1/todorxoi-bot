@@ -12,6 +12,7 @@ pipeline.py — единая точка входа для бота: «дай т�
 пользователю не нужно ничего указывать руками.
 """
 
+import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -26,6 +27,8 @@ from .translit_todo import (
     todo_to_translit,
     translit_to_todo,
 )
+
+log = logging.getLogger(__name__)
 
 TARGET_TRANSLIT = "translit"
 TARGET_TODO = "todo"
@@ -114,6 +117,11 @@ class Result:
     transparent: bool = False
     # цвета текста и фона совпали, пришлось откатиться на чёрное по белому
     color_fallback: bool = False
+    # Калмыцкие буквы (см. core/fix_letters.py). letters_flag — почему текст
+    # похож на набранный без ә ө ү һ җ ң ('' — не похож); letter_fixes —
+    # что исправлено, если пользователь включил исправление в /settings.
+    letters_flag: str = ""
+    letter_fixes: list = field(default_factory=list)
     elapsed_ms: float = 0.0
     steps_ms: dict = field(default_factory=dict)
     stats: dict = field(default_factory=dict)
@@ -147,7 +155,7 @@ def _check_input(text: str) -> str:
     return text
 
 
-def _to_translit(text: str, script: str, res: Result) -> str:
+def _to_translit(text: str, script: str, res: Result, fix_letters: bool = False) -> str:
     """Приводит любой вход к транслитерации проекта."""
     if script == SCRIPT_TRANSLIT:
         return text
@@ -159,6 +167,7 @@ def _to_translit(text: str, script: str, res: Result) -> str:
     if script == SCRIPT_CYRILLIC:
         from .transliterate import transliterate_with_stats
 
+        text = _check_letters(text, res, fix_letters)
         t0 = time.perf_counter()
         # Кириллицу приводим к строчным. Заглавная буква сама по себе
         # безобидна, но восстановление регистра после модели ломает
@@ -176,12 +185,40 @@ def _to_translit(text: str, script: str, res: Result) -> str:
     )
 
 
-def process(text: str, target: str, options: Optional[ImageOptions] = None) -> Result:
+def _check_letters(text: str, res: Result, fix: bool) -> str:
+    """Кириллица без калмыцких букв: исправить (если пользователь включил)
+    или только заметить — тогда бот подскажет, что есть такая настройка."""
+    from . import fix_letters
+
+    t0 = time.perf_counter()
+    try:
+        if fix:
+            fixed = fix_letters.fix_text(text)
+            res.letters_flag = fixed.detection.flag
+            res.letter_fixes = fixed.fixes
+            text = fixed.text
+        else:
+            res.letters_flag = fix_letters.detect(text).flag
+    except Exception:
+        # без словаря бот работает как раньше: переводит текст как есть
+        log.exception("проверка калмыцких букв не удалась")
+    res.steps_ms["буквы"] = (time.perf_counter() - t0) * 1000
+    return text
+
+
+def process(
+    text: str,
+    target: str,
+    options: Optional[ImageOptions] = None,
+    fix_letters: bool = False,
+) -> Result:
     """Основная функция. Синхронная и не быстрая (модель) — в боте её
     нужно звать через asyncio.to_thread.
 
     options — настройки картинки конкретного пользователя; для режимов
-    транслитерации и тодо бичиг не используются."""
+    транслитерации и тодо бичиг не используются. fix_letters — исправлять
+    ли кириллицу, набранную без ә ө ү һ җ ң (настройка в /settings,
+    по умолчанию выключена)."""
     opts = options or ImageOptions()
     text = _check_input(text)
     script = detect_script(text)
@@ -195,7 +232,7 @@ def process(text: str, target: str, options: Optional[ImageOptions] = None) -> R
     started = time.perf_counter()
 
     if target == TARGET_TRANSLIT:
-        res.translit = _to_translit(text, script, res)
+        res.translit = _to_translit(text, script, res, fix_letters)
 
     elif target == TARGET_TODO:
         if script == SCRIPT_TODO:
@@ -203,7 +240,7 @@ def process(text: str, target: str, options: Optional[ImageOptions] = None) -> R
                 "Этот текст уже записан тодо бичиг. Если нужна картинка — "
                 "используйте /image."
             )
-        res.translit = _to_translit(text, script, res)
+        res.translit = _to_translit(text, script, res, fix_letters)
         t0 = time.perf_counter()
         res.todo = translit_to_todo(res.translit)
         res.steps_ms["translit→тодо"] = (time.perf_counter() - t0) * 1000
@@ -231,7 +268,7 @@ def process(text: str, target: str, options: Optional[ImageOptions] = None) -> R
         if script == SCRIPT_TODO:
             res.todo = text
         else:
-            res.translit = _to_translit(text, script, res)
+            res.translit = _to_translit(text, script, res, fix_letters)
             t0 = time.perf_counter()
             res.todo = translit_to_todo(res.translit)
             res.steps_ms["translit→тодо"] = (time.perf_counter() - t0) * 1000

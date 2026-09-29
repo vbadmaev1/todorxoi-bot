@@ -46,8 +46,31 @@ def render_result(res: Result) -> str:
             )
         blocks.append(f"Тодо бичиг:\n<code>{escape(res.todo or '')}</code>")
 
+    note = letters_note(res)
+    if note:
+        blocks.append(note)
     blocks.append(timing_line(res))
     return "\n\n".join(blocks)
+
+
+# сколько исправленных слов показывать, остальные — «и ещё N»
+LETTER_FIXES_SHOWN = 12
+
+
+def letters_note(res: Result) -> str:
+    """Что сделано с калмыцкими буквами: список исправлений, если
+    исправление включено, или подсказка про /settings, если выключено, а
+    текст похож на набранный без ә ө ү һ җ ң."""
+    if res.letter_fixes:
+        shown = res.letter_fixes[:LETTER_FIXES_SHOWN]
+        pairs = ", ".join(f"{escape(a)} → {escape(b)}" for a, b in shown)
+        text = texts.LETTERS_FIXED.format(pairs=pairs)
+        if len(res.letter_fixes) > len(shown):
+            text += texts.LETTERS_FIXED_MORE.format(n=len(res.letter_fixes) - len(shown))
+        return text
+    if res.letters_flag:
+        return texts.LETTERS_HINT
+    return ""
 
 
 def render_caption(res: Result, page: int = 1, pages: int = 1) -> str:
@@ -82,6 +105,9 @@ def _image_caption(res: Result, page: int = 1, pages: int = 1) -> str:
             blocks.append(texts.COLOR_FALLBACK_NOTE)
         if res.pages_dropped:
             blocks.append(texts.PAGES_DROPPED.format(n=res.pages_dropped))
+        note = letters_note(res)
+        if note:
+            blocks.append(note)
 
     if page == pages:
         blocks.append(timing_line(res))
