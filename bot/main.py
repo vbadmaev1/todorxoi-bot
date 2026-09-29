@@ -55,6 +55,15 @@ async def _warmup() -> None:
     except Exception:
         log.exception("прогрев модели не удался — бот продолжит работу")
 
+    # словарь для текста без калмыцких букв (~35 МБ, ~1 с на загрузку)
+    from core import fix_letters
+
+    try:
+        fixer = await asyncio.to_thread(fix_letters.get_fixer)
+        log.info("словарь калмыцких букв готов: %d слов", len(fixer.freq))
+    except Exception:
+        log.exception("словарь калмыцких букв не загрузился — бот продолжит работу")
+
     # Распознавание фото — отдельная модель и отдельные зависимости
     # (onnxruntime, scipy). Если их нет, бот работает, фото не читает.
     from core import ocr

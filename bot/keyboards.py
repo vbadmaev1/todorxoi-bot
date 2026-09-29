@@ -19,6 +19,7 @@ from . import texts
 #   conv:image:<request_id>
 #   set:pick:<поле>         — открыть палитру/список размеров
 #   set:set:<поле>:<знач>   — выбрать значение
+#   set:toggle:fix_letters  — исправлять текст без калмыцких букв: вкл/выкл
 #   set:back:-              — вернуться в меню настроек
 #   set:reset:-             — сбросить всё на умолчания
 
@@ -85,7 +86,7 @@ def result_keyboard(request_id: int, target: str, with_feedback: bool = True):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def settings_menu(opts) -> InlineKeyboardMarkup:
+def settings_menu(opts, fix_letters: bool = False) -> InlineKeyboardMarkup:
     """Главный экран /settings: что менять."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -111,6 +112,12 @@ def settings_menu(opts) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text=f"✒️ Шрифт: {FONT_LABELS.get(opts.font, opts.font)}",
                     callback_data=f"{CB_SETTINGS}:pick:font",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"🔡 Без калмыцких букв: {'исправлять' if fix_letters else 'не трогать'}",
+                    callback_data=f"{CB_SETTINGS}:toggle:fix_letters",
                 )
             ],
             [

@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS requests (
     elapsed_ms   REAL,
     steps_json   TEXT,
     ok           INTEGER NOT NULL DEFAULT 1,
-    error        TEXT
+    error        TEXT,
+    letters_json TEXT                -- кириллица без ә ө ү һ җ ң: что заметили/исправили
 );
 
 CREATE TABLE IF NOT EXISTS feedback (
@@ -70,6 +71,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
     bg         TEXT,
     size       TEXT,
     font       TEXT,
+    fix_letters TEXT,               -- on | off: исправлять текст без калмыцких букв
     updated_at TEXT NOT NULL
 );
 
@@ -79,6 +81,9 @@ CREATE INDEX IF NOT EXISTS idx_feedback_request ON feedback(request_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_unique
     ON feedback(request_id, user_id);
 """
+
+
+_SETTING_FIELDS = ("fg", "bg", "size", "font", "fix_letters")
 
 
 def _now() -> str:
@@ -94,8 +99,12 @@ class Storage:
 
     # ---------------------------------------------------------------- setup
 
-    # старые базы заводились без колонки font — добавляем на лету
-    _MIGRATIONS = ("ALTER TABLE user_settings ADD COLUMN font TEXT",)
+    # старые базы заводились без этих колонок — добавляем на лету
+    _MIGRATIONS = (
+        "ALTER TABLE user_settings ADD COLUMN font TEXT",
+        "ALTER TABLE user_settings ADD COLUMN fix_letters TEXT",
+        "ALTER TABLE requests ADD COLUMN letters_json TEXT",
+    )
 
     def connect(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -144,15 +153,19 @@ class Storage:
             "steps_json": json.dumps(kw.get("steps") or {}, ensure_ascii=False),
             "ok": 1 if kw.get("ok", True) else 0,
             "error": kw.get("error"),
+            "letters_json": (
+                json.dumps(kw["letters"], ensure_ascii=False) if kw.get("letters") else None
+            ),
         }
         with self._lock:
             cur = self._conn.execute(
                 """INSERT INTO requests
                    (created_at, user_id, username, chat_id, target, source_script,
-                    input_text, translit, todo, elapsed_ms, steps_json, ok, error)
+                    input_text, translit, todo, elapsed_ms, steps_json, ok, error,
+                    letters_json)
                    VALUES (:created_at, :user_id, :username, :chat_id, :target,
                            :source_script, :input_text, :translit, :todo,
-                           :elapsed_ms, :steps_json, :ok, :error)""",
+                           :elapsed_ms, :steps_json, :ok, :error, :letters_json)""",
                 row,
             )
             self._conn.commit()
@@ -194,21 +207,21 @@ class Storage:
             row = cur.fetchone()
         return dict(row) if row else None
 
-    # ---------------------------------------------- настройки картинки
+    # ---------------------------------------------- настройки пользователя
 
     def _get_settings(self, user_id: int) -> dict:
         with self._lock:
             row = self._conn.execute(
-                "SELECT fg, bg, size, font FROM user_settings WHERE user_id = ?",
+                "SELECT fg, bg, size, font, fix_letters FROM user_settings WHERE user_id = ?",
                 (user_id,),
             ).fetchone()
         if not row:
             return {}
         # None-поля не отдаём: пусть сработает значение по умолчанию
-        return {k: row[k] for k in ("fg", "bg", "size", "font") if row[k]}
+        return {k: row[k] for k in _SETTING_FIELDS if row[k]}
 
     def _set_setting(self, user_id: int, field: str, value: str) -> None:
-        if field not in ("fg", "bg", "size", "font"):
+        if field not in _SETTING_FIELDS:
             raise ValueError(f"неизвестная настройка: {field}")
         with self._lock:
             self._conn.execute(
@@ -281,7 +294,8 @@ class Storage:
                    r.input_text    AS input_text,
                    r.translit      AS bot_translit,
                    r.todo          AS bot_todo,
-                   r.elapsed_ms    AS elapsed_ms
+                   r.elapsed_ms    AS elapsed_ms,
+                   r.letters_json  AS letters
             FROM feedback f
             JOIN requests r ON r.id = f.request_id
         """

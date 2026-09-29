@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-/settings — цвет текста, цвет фона и размер шрифта для картинки.
+/settings — цвет текста, цвет фона и размер шрифта для картинки, а ещё
+исправление текста, набранного без калмыцких букв (core/fix_letters.py;
+по умолчанию выключено — правильно набранный текст не должен меняться
+без спроса).
 
 Настройки у каждого пользователя свои и лежат в таблице user_settings,
 то есть переживают перезапуск бота (в отличие от режима, который живёт в
@@ -52,24 +55,34 @@ async def load_options(storage: Storage, user_id: int) -> ImageOptions:
     return opts
 
 
-def _describe(opts: ImageOptions) -> str:
+async def load_fix_letters(storage: Storage, user_id: int) -> bool:
+    """Исправлять ли текст без калмыцких букв. По умолчанию — нет."""
+    return (await storage.get_settings(user_id)).get("fix_letters") == "on"
+
+
+def _describe(opts: ImageOptions, fix_letters: bool) -> str:
     return texts.SETTINGS.format(
         fg=color_label(opts.fg),
         bg=color_label(opts.bg),
         size=keyboards.SIZE_LABELS.get(opts.size, opts.size),
         font=keyboards.FONT_LABELS.get(opts.font, opts.font),
+        fix_letters=texts.FIX_LETTERS_ON if fix_letters else texts.FIX_LETTERS_OFF,
     )
 
 
 @router.message(Command("settings"))
 async def cmd_settings(message: Message, storage: Storage) -> None:
-    opts = await load_options(storage, message.from_user.id)
-    await message.answer(_describe(opts), reply_markup=keyboards.settings_menu(opts))
+    user_id = message.from_user.id
+    opts = await load_options(storage, user_id)
+    fix = await load_fix_letters(storage, user_id)
+    await message.answer(
+        _describe(opts, fix), reply_markup=keyboards.settings_menu(opts, fix)
+    )
 
 
-async def _refresh(callback: CallbackQuery, opts: ImageOptions, markup) -> None:
+async def _refresh(callback: CallbackQuery, opts: ImageOptions, fix: bool, markup) -> None:
     try:
-        await callback.message.edit_text(_describe(opts), reply_markup=markup)
+        await callback.message.edit_text(_describe(opts, fix), reply_markup=markup)
     except TelegramBadRequest:
         # «message is not modified» — значит показывать уже нечего
         pass
@@ -81,6 +94,7 @@ async def on_settings(callback: CallbackQuery, storage: Storage) -> None:
     action = parts[1] if len(parts) > 1 else ""
     user_id = callback.from_user.id
     opts = await load_options(storage, user_id)
+    fix = await load_fix_letters(storage, user_id)
 
     if action == "pick":
         field = parts[2]
@@ -91,7 +105,14 @@ async def on_settings(callback: CallbackQuery, storage: Storage) -> None:
         else:
             markup = keyboards.color_picker(field, getattr(opts, field))
         await callback.answer()
-        await _refresh(callback, opts, markup)
+        await _refresh(callback, opts, fix, markup)
+        return
+
+    if action == "toggle" and parts[2:3] == ["fix_letters"]:
+        fix = not fix
+        await storage.set_setting(user_id, "fix_letters", "on" if fix else "off")
+        await callback.answer("Буду исправлять" if fix else "Не буду исправлять")
+        await _refresh(callback, opts, fix, keyboards.settings_menu(opts, fix))
         return
 
     if action == "set":
@@ -109,19 +130,19 @@ async def on_settings(callback: CallbackQuery, storage: Storage) -> None:
             await callback.answer(texts.SETTINGS_SAME_COLOR, show_alert=True)
         else:
             await callback.answer("Сохранил")
-        await _refresh(callback, opts, keyboards.settings_menu(opts))
+        await _refresh(callback, opts, fix, keyboards.settings_menu(opts, fix))
         return
 
     if action == "back":
         await callback.answer()
-        await _refresh(callback, opts, keyboards.settings_menu(opts))
+        await _refresh(callback, opts, fix, keyboards.settings_menu(opts, fix))
         return
 
     if action == "reset":
         await storage.reset_settings(user_id)
         opts = ImageOptions()
         await callback.answer("Вернул настройки по умолчанию")
-        await _refresh(callback, opts, keyboards.settings_menu(opts))
+        await _refresh(callback, opts, False, keyboards.settings_menu(opts))
         return
 
     await callback.answer()
