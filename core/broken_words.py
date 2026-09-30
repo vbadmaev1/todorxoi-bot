@@ -25,15 +25,34 @@ broken_words.py — слово, которое распознавание раз
 (amita ni, nöl ügei): на кириллицу это не влияет. Незнакомое слитное
 слово (старая орфография) ничего не склеивает — остаётся как было.
 
+Второе правило — для слов, которых в корпусе нет (старая орфография, ошибка
+в букве): d uu -> duu, köüked iain -> köükediain, be yeni -> beyeni. Нужны
+все три условия:
+  * узкий пробел, у которого на картинке нет ни одной пустой полоски
+    поперёк столбца (штрихи перекрываются — отрыв пера);
+  * правый кусок редкий (встречается в корпусе реже RARE раз: yeni, ü,
+    iain) или левый — незнакомый обрывок в 1–2 буквы (d uu). Незнакомая
+    основа перед частым суффиксом (dobuyin ni, nasun ni) — это обычный
+    узкий пробел редкого слова, его не трогаем;
+  * посимвольная языковая модель по словам корпуса (5-граммы, Witten-Bell)
+    считает ab как одно слово правдоподобнее, чем a и b по отдельности, с
+    запасом PEN_LIFT_GAIN: d+uu +12.6, köüked+iain +12.7, mend+ü +10.9,
+    be+yeni +10.1; настоящий суффикс kele+bēr +3.7, частица ene+le +9.1.
+Замер на синтетике (2488 столбцов шести шрифтов): без условий на куски и
+языковой модели правило портило 157 столбцов, с ними — ни одного сверх
+словарного правила (6 столбцов, почти все — суффиксы одного кириллического
+слова). Языковая модель строится при прогреве: ~1.3 с, ~30 МБ.
+
 Частоты — model/todo_words.tsv.gz, собирает tools/build_todo_words.py.
 """
 
 import gzip
+import math
 import os
 import re
 import threading
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Sequence
 
 from .translit_todo import todo_to_translit
 
@@ -70,6 +89,79 @@ _TAIL = re.compile("[\u1820-\u18aa]+$")
 _HEAD = re.compile("^[\u1820-\u18aa]+")
 
 
+NNBSP = "\u202f"
+# на сколько (натуральный логарифм) слитное слово должно быть правдоподобнее
+# двух отдельных, чтобы склеить шов-отрыв пера без слитного слова в корпусе
+PEN_LIFT_GAIN = 10.0
+# кусок, встреченный в корпусе реже этого, — скорее обрывок слова (ü, dür)
+RARE = 5
+LM_ORDER = 5
+
+
+class CharLM:
+    """Посимвольная n-граммная модель слов (Witten-Bell). Учится на типах
+    слов, а не на употреблениях: иначе частые суффиксы (ni, bēr) задавили
+    бы всё остальное."""
+
+    def __init__(self, words, order: int = LM_ORDER):
+        self.order = order
+        cnt, ctx_n = {}, {}
+        for w in words:
+            s = "^" * (order - 1) + w + "$"
+            for i in range(order - 1, len(s)):
+                for k in range(1, order + 1):
+                    c = s[i - k + 1:i]
+                    key = c + "\t" + s[i]
+                    cnt[key] = cnt.get(key, 0) + 1
+                    ctx_n[c] = ctx_n.get(c, 0) + 1
+        ctx_t = {}
+        for key in cnt:
+            c = key.split("\t", 1)[0]
+            ctx_t[c] = ctx_t.get(c, 0) + 1
+        self.cnt, self.ctx_n, self.ctx_t = cnt, ctx_n, ctx_t
+        self.vocab = len({ch for w in words for ch in w}) + 1
+
+    def _prob(self, s: str, i: int, k: int) -> float:
+        if k == 0:
+            return 1.0 / self.vocab
+        c = s[i - k + 1:i]
+        lower = self._prob(s, i, k - 1)
+        n = self.ctx_n.get(c, 0)
+        if not n:
+            return lower
+        lam = n / (n + self.ctx_t[c])
+        return lam * self.cnt.get(c + "\t" + s[i], 0) / n + (1 - lam) * lower
+
+    def logp(self, word: str) -> float:
+        s = "^" * (self.order - 1) + word + "$"
+        return sum(math.log(self._prob(s, i, self.order)) for i in range(self.order - 1, len(s)))
+
+    def gain(self, a: str, b: str) -> float:
+        """Насколько ab как одно слово правдоподобнее, чем a и b по отдельности."""
+        return self.logp(a + b) - self.logp(a) - self.logp(b)
+
+
+_LM: Optional[CharLM] = None
+
+
+def get_lm() -> CharLM:
+    global _LM
+    if _LM is None:
+        freq = get_freq()
+        with _LOCK:
+            if _LM is None:
+                _LM = CharLM(freq)
+    return _LM
+
+
+def is_pen_lift(a: str, b: str, freq: Dict[str, int]) -> bool:
+    """Шов без просвета на картинке: склеить ли a и b, когда слитного слова
+    в корпусе нет (условия — в начале файла)."""
+    fa, fb = freq.get(a, 0), freq.get(b, 0)
+    fragment = fb < RARE or (fa == 0 and len(a) <= 2)
+    return fragment and get_lm().gain(a, b) > PEN_LIFT_GAIN
+
+
 def should_join(a: str, b: str, ab: str, freq: Dict[str, int]) -> bool:
     """a, b — транслитерация кусков у шва, ab — слитного слова (считается
     отдельно: x/k и g/γ зависят от соседней буквы)."""
@@ -77,28 +169,68 @@ def should_join(a: str, b: str, ab: str, freq: Dict[str, int]) -> bool:
     return n > 0 and n >= min(freq.get(a, 0), freq.get(b, 0))
 
 
-def join_broken_words(todo: str) -> str:
+def _goes_right(head: str, right_word: str, ab: str, freq: Dict[str, int]) -> bool:
+    """Обрывок посередине («mori d ēn», «bi d ü»): склеить его скорее с
+    правым соседом? Да, если весь кусок — буквы, справа он складывается в
+    слово корпуса и это слово частотнее, чем слитное с левым: dēn (2012)
+    важнее morid (198), dü (9057) — bid (5)."""
+    nxt = _HEAD.match(right_word)
+    if not nxt or not _HEAD.fullmatch(head):
+        return False
+    b, c = todo_to_translit(head), todo_to_translit(nxt.group())
+    bc = todo_to_translit(head + nxt.group())
+    return should_join(b, c, bc, freq) and freq.get(bc, 0) > freq.get(ab, 0)
+
+
+def join_mask(todo: str, tight: Optional[Sequence[bool]] = None) -> List[bool]:
+    """Какие символы строки оставить (False — промежуток внутри слова).
+
+    tight[k] — у узкого пробела на месте k на картинке нет ни одной пустой
+    полоски поперёк столбца (см. core/ocr.py, Model.read). Такой шов
+    склеивается и без слитного слова в корпусе — по is_pen_lift."""
+    keep = [True] * len(todo)
+    gaps = list(_GAP.finditer(todo))
+    if not gaps:
+        return keep
+    freq = get_freq()
+    words = [todo[:gaps[0].start()]] + [
+        todo[g.end():(gaps[k + 1].start() if k + 1 < len(gaps) else len(todo))]
+        for k, g in enumerate(gaps)
+    ]
+    left = words[0]
+    for k, gap in enumerate(gaps):
+        word = words[k + 1]
+        tail, head = _TAIL.search(left), _HEAD.match(word)
+        join = False
+        if tail and head:
+            a, b = todo_to_translit(tail.group()), todo_to_translit(head.group())
+            ab = todo_to_translit(tail.group() + head.group())
+            right = (freq.get(b, 0) == 0 and k + 1 < len(gaps)
+                     and _goes_right(head.group(), words[k + 2], ab, freq))
+            if not right:
+                join = should_join(a, b, ab, freq) or (
+                    tight is not None
+                    and all(todo[i] == NNBSP and tight[i] for i in range(gap.start(), gap.end()))
+                    and is_pen_lift(a, b, freq)
+                )
+        if join:
+            for i in range(gap.start(), gap.end()):
+                keep[i] = False
+            left += word
+        else:
+            left = word
+    return keep
+
+
+def join_broken_words(todo: str, tight: Optional[Sequence[bool]] = None) -> str:
     """Строка тодо бичиг (столбец) -> та же строка без разрывов внутри слов.
 
     Решение принимается по транслитерации, но убирается сам промежуток в
     тодо бичиг: и транслитерация, и кириллица дальше строятся уже из
     исправленной строки."""
-    parts = _GAP.split(todo)
-    if len(parts) < 3:
-        return todo
-    freq = get_freq()
-    out = [parts[0]]
-    for gap, word in zip(parts[1::2], parts[2::2]):
-        tail, head = _TAIL.search(out[-1]), _HEAD.match(word)
-        if tail and head and should_join(
-            todo_to_translit(tail.group()), todo_to_translit(head.group()),
-            todo_to_translit(tail.group() + head.group()), freq,
-        ):
-            out[-1] += word
-        else:
-            out += [gap, word]
-    return "".join(out)
+    return "".join(ch for ch, k in zip(todo, join_mask(todo, tight)) if k)
 
 
 def warmup() -> int:
+    get_lm()
     return len(get_freq())

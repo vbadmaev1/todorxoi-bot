@@ -746,6 +746,19 @@ async def _check_ocr(dp, bot, session, storage):
           "разрыв пера внутри слова склеивается: örgöǰi kü -> örgöǰikü, ged eq -> gedeq")
     check(ocr.to_translit(join_broken_words(_t2t("erdeni-dü nutuq tu"))) == "erdeni dü nutuq tu",
           "настоящие отдельные слова не склеиваются: erdeni dü, nutuq tu")
+    def _tight(t):   # как будто у каждого узкого пробела на картинке нет просвета
+        return [ch == "\u202f" for ch in t]
+    broken = _t2t("köüked-iain d-uu kelled-eq")
+    check(ocr.to_translit(join_broken_words(broken, _tight(broken))) == "köükediain duu kelledeq",
+          "отрыв пера без слитного слова в корпусе: köüked iain, d uu, kelled eq склеиваются")
+    check(ocr.to_translit(join_broken_words(broken)) == "köüked iain d uu kelled eq",
+          "...но только если на картинке в этом месте нет просвета")
+    middle = _t2t("mori-d-ēn bi-d-ü mend-ü")
+    check(ocr.to_translit(join_broken_words(middle, _tight(middle))) == "mori dēn bi dü mendü",
+          "обрывок посередине уходит к частотному слову (mori dēn, не morid ēn); mend ü -> mendü")
+    rare = _t2t("dobuyin-ni kele-bēr")
+    check(ocr.to_translit(join_broken_words(rare, _tight(rare))) == "dobuyin ni kele bēr",
+          "редкая основа перед частым суффиксом не склеивается и без просвета")
 
     # Цвет: раньше картинка переводилась в серое, а фоном считалось «то, что
     # темнее 128 по краю». Жёлтое на оранжевом давало ореолы вместо букв,
