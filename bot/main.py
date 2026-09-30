@@ -112,7 +112,10 @@ async def main() -> None:
 
     bot = Bot(
         token=config.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        # превью ссылки на канал под /start и /help — лишняя карточка на пол-экрана
+        default=DefaultBotProperties(
+            parse_mode=ParseMode.HTML, link_preview_is_disabled=True
+        ),
     )
     dp = Dispatcher(storage=MemoryStorage())
     dp["storage"] = storage

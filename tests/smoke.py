@@ -208,6 +208,7 @@ async def main():
     await dp.feed_update(bot, msg("/start"))
     _, m = session.last("SendMessage")
     check(m and "Тодо Бичик бот" in m.text, "/start отвечает приветствием")
+    check("t.me/todorxoi_uzuq" in m.text, "в /start есть ссылка на канал")
 
     await dp.feed_update(bot, msg("/help"))
     _, m = session.last("SendMessage")
