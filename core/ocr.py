@@ -8,6 +8,8 @@ ocr.py — распознавание тодо бичиг с фото: карт�
      поворачивается, приводится к высоте 64 и идёт в сеть. Модель int8 под
      onnxruntime: 4 МБ, torch не нужен; на CPU ~1 с на полную страницу в
      один поток. Как она получена из обученной — tools/export_ocr_onnx.py.
+  2а. Слова, разорванные отрывом пера (örgöǰi kü -> örgöǰikü), склеиваются
+     по частотам слов корпуса — core/broken_words.py.
   3. Транслитерация — тем же todo_to_translit, что и в текстовых режимах;
      перед ней убираются висячие узкие пробелы, знаки — в латинские.
   3а. Кириллица — core/to_cyrillic.py: сегментатор решает, какие слова
@@ -109,6 +111,17 @@ def tidy(text: str) -> str:
 # остаётся: там он виден только как чуть меньший промежуток.
 def to_translit(todo: str) -> str:
     return todo_to_translit(todo.replace(" ", " ")).translate(_PUNCT_TO_LATIN)
+
+
+def join_broken(todo: list) -> list:
+    """Столбцы -> те же столбцы без разрывов внутри слов (core/broken_words.py).
+    Без файла частот столбцы остаются как есть."""
+    try:
+        from .broken_words import join_broken_words
+        return [join_broken_words(t) for t in todo]
+    except Exception:
+        log.exception("склейка разорванных слов не получилась")
+        return todo
 
 
 def to_cyrillic_columns(translit: list) -> list:
@@ -322,6 +335,7 @@ def warmup() -> dict:
     _split_page()
     m = get_model()
     m.read([Image.new("L", (64, 400), 255)])
+    join_broken(["\u1820 \u1820"])             # частоты слов для склейки разрывов
     return {"model_path": m.path, "alphabet": len(m.chars)}
 
 
@@ -429,6 +443,7 @@ def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNC
     # Страница размечена целиком — столбцы идут одним текстом: бирга перед
     # первым, четыре точки после последнего. Число строк не меняется, иначе
     # сбилась бы нумерация рамок.
+    todo = join_broken(todo)
     todo = apply_punctuation(normalize_j("\n".join(todo)), punctuation).split("\n")
     translit = [to_translit(t) for t in todo]
     steps["транслитерация"] = (time.perf_counter() - t0) * 1000

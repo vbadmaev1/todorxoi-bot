@@ -739,6 +739,13 @@ async def _check_ocr(dp, bot, session, storage):
           "в транслитерации распознанного текста узкий пробел — пробел, не дефис")
     check(len(framed.cyrillic_columns) == len(framed.columns) and framed.cyrillic.strip(),
           "распознанное фото: кириллица по строке на столбец")
+    from core.broken_words import join_broken_words
+    from core.translit_todo import translit_to_todo as _t2t
+
+    check(ocr.to_translit(join_broken_words(_t2t("örgöǰi-kü ged-eq"))) == "örgöǰikü gedeq",
+          "разрыв пера внутри слова склеивается: örgöǰi kü -> örgöǰikü, ged eq -> gedeq")
+    check(ocr.to_translit(join_broken_words(_t2t("erdeni-dü nutuq tu"))) == "erdeni dü nutuq tu",
+          "настоящие отдельные слова не склеиваются: erdeni dü, nutuq tu")
 
     # Цвет: раньше картинка переводилась в серое, а фоном считалось «то, что
     # темнее 128 по краю». Жёлтое на оранжевом давало ореолы вместо букв,
