@@ -22,7 +22,7 @@ from .. import formatting, keyboards, texts
 from ..config import Config
 from ..state import get_mode
 from ..storage import Storage
-from .settings import load_fix_letters, load_options
+from .settings import load_fix_letters, load_options, load_punctuation
 
 log = logging.getLogger(__name__)
 router = Router(name="translate")
@@ -59,9 +59,14 @@ async def handle_text(
     if target == core.TARGET_IMAGE and user:
         options = await load_options(storage, user.id)
     fix_letters = bool(user) and await load_fix_letters(storage, user.id)
+    punctuation = (
+        await load_punctuation(storage, user.id) if user else core.DEFAULT_PUNCT
+    )
 
     try:
-        res = await asyncio.to_thread(core.process, text, target, options, fix_letters)
+        res = await asyncio.to_thread(
+            core.process, text, target, options, fix_letters, punctuation
+        )
     except core.PipelineError as exc:
         await storage.save_request(ok=False, error=str(exc), **base)
         await message.answer(f"⚠️ {exc}")

@@ -279,6 +279,28 @@ async def main():
     check(todo_to_translit(translit_to_todo("abči")) == "abči",
           "обратно ᡔᡅ разворачивается в či")
 
+    print("\n4a2a. Три записи ǰ: ᠴ перед i, ᡚ в начале перед a/o/u, иначе ᡓ")
+    import core
+    from core.translit_todo import normalize_j
+
+    check(core.process("Җаңһр", "todo").todo == "\u185a\u1820\u184a\u184e\u1820\u1837",
+          "Җаңһр -> ᡚᠠᡊᡎᠠᠷ")
+    check(translit_to_todo("ǰil") == "\u1834\u1845\u182f", "ǰi пишется ᠴᡅ")
+    check(translit_to_todo("xalīlγaǰi").endswith("\u1834\u1845"), "ǰi в конце слова — тоже ᠴᡅ")
+    check(translit_to_todo("ǰī").startswith("\u1834\u1845"), "и перед долгой ī")
+    check(translit_to_todo("ǰolō").startswith("\u185a"), "ǰo в начале слова — ᡚ")
+    check(translit_to_todo("aǰa") == "\u1820\u1853\u1820", "внутри слова ǰa — обычная ᡓ")
+    check(translit_to_todo("āǰa") == "\u1820\u1843\u1853\u1820",
+          "и после долгой гласной ǰ не считается начальной")
+    check(translit_to_todo("ǰe").startswith("\u1853"), "перед передней гласной — ᡓ")
+    check(translit_to_todo("adǰi") == "\u1820\u1851\u1834\u1845",
+          "dǰi не схлопывается в ᡜ (dz)")
+    for w in ("ǰangγar", "ǰil", "ǰabǰi", "adǰi", "ǰāxan", "zaγas"):
+        check(todo_to_translit(translit_to_todo(w)) == w, f"{w}: туда и обратно без потерь")
+    check(normalize_j("\u1853\u1820 \u1820\u1853\u1845 \u1820\u1853\u1820")
+          == "\u185a\u1820 \u1820\u1834\u1845 \u1820\u1853\u1820",
+          "готовый юникод (с фото) приводится к тем же правилам")
+
     print("\n4a3. Буква k перед задней гласной, тире, знаки препинания")
     check(translit_to_todo("karou") == "\u1857\u1820\u1837\u1846\u1847",
           f"karou -> {translit_to_todo('karou')} (ждём ᡗᠠᠷᡆᡇ с TODO KA)")
@@ -289,12 +311,31 @@ async def main():
     check("\u202f" in translit_to_todo("γazar-yēn"),
           "дефис внутри слова по-прежнему узкий неразрывный пробел")
 
-    from core.punctuation import add_punctuation
+    from core.punctuation import (
+        PUNCT_ALL,
+        PUNCT_FRAME,
+        PUNCT_OFF,
+        add_punctuation,
+        apply_punctuation,
+    )
 
-    from core.punctuation import FRAME_MIN_CHARS, needs_frame
+    src = translit_to_todo("xalimaq ulus, eke! ecege — ulus.")
+    off = apply_punctuation(src, PUNCT_OFF)
+    check(not set(off) & set("︐︒︕︖︱᠀᠂᠃᠅"), f"без знаков — только слова: {off}")
+    check("  " not in off, "на месте знаков не остаётся двойных пробелов")
+    framed = apply_punctuation(src, PUNCT_FRAME)
+    check(framed.startswith("\u1800") and framed.endswith("\u1805")
+          and not set(framed[1:-1]) & set("︐︒︕︖︱᠂᠃"),
+          f"только бирга и четыре точки: {framed}")
+    full = apply_punctuation(src, PUNCT_ALL)
+    check(full.startswith("\u1800") and "\u1802" in full and full.endswith("\u1805"),
+          f"все знаки: {full}")
+    check(apply_punctuation(translit_to_todo("eke"), PUNCT_ALL).endswith("\u1805"),
+          "четыре точки ставятся и без точки в конце")
+    check(apply_punctuation("\u1820\u1803\n\u1845\u1803\n", PUNCT_ALL)
+          == "\u1800\u1820\u1803\n\u1845\u1805\n",
+          "в несколько строк: бирга в первой, четыре точки в последней непустой")
 
-    check(not needs_frame("хальмг улс"), "короткий текст не обрамляется")
-    check(needs_frame("х" * (FRAME_MIN_CHARS + 1)), "длинный — обрамляется")
     plain_short = add_punctuation(translit_to_todo("eke. ecege."), frame=False)
     check("\u1800" not in plain_short and "\u1805" not in plain_short,
           "без обрамления нет ни бирги, ни четырёх точек")
@@ -441,6 +482,43 @@ async def main():
     await dp.feed_update(bot, cb("set:reset:-"))
     saved = await storage.get_settings(USER.id)
     check(not saved, "сброс настроек очищает запись")
+
+    print("\n4b1. Знаки препинания в /settings")
+    await dp.feed_update(bot, msg("/settings"))
+    _, m = session.last("SendMessage")
+    check("Ставить: <b>не ставить</b>" in m.text, "по умолчанию знаки не ставятся")
+    marks = set("︐︒︕︖᠀᠂᠃᠅")
+    await dp.feed_update(bot, msg("/todo Хальмг улс, мана улс."))
+    _, m = session.last("SendMessage")
+    check(not set(m.text) & marks, "в /todo нет ни одного знака тодо бичиг")
+
+    await dp.feed_update(bot, cb("set:pick:punctuation"))
+    _, m = session.last()
+    buttons = [b.callback_data for row in m.reply_markup.inline_keyboard for b in row]
+    check("set:set:punctuation:frame" in buttons, "выбор из трёх режимов")
+    await dp.feed_update(bot, cb("set:set:punctuation:all"))
+    saved = await storage.get_settings(USER.id)
+    check(saved.get("punctuation") == "all", "режим «все» сохранён в БД")
+    await dp.feed_update(bot, msg("/todo Хальмг улс, мана улс."))
+    _, m = session.last("SendMessage")
+    check("᠀" in m.text and "᠂" in m.text and "᠅" in m.text,
+          "«все»: бирга, запятая и четыре точки")
+
+    await dp.feed_update(bot, cb("set:set:punctuation:frame"))
+    await dp.feed_update(bot, msg("/todo Хальмг улс, мана улс."))
+    _, m = session.last("SendMessage")
+    check("᠀" in m.text and "᠅" in m.text and "᠂" not in m.text,
+          "«только начало и конец»: без запятой")
+    await dp.feed_update(bot, msg("/image Хальмг улс, мана улс."))
+    with storage._lock:
+        row = storage._conn.execute("SELECT todo FROM requests ORDER BY id DESC LIMIT 1").fetchone()
+    check(row["todo"].startswith("᠀") and row["todo"].endswith("᠅"),
+          "и картинка рисуется по той же настройке")
+
+    await dp.feed_update(bot, cb("set:set:punctuation:nonsense"))
+    saved = await storage.get_settings(USER.id)
+    check(saved.get("punctuation") == "frame", "мусорное значение не сохраняется")
+    await dp.feed_update(bot, cb("set:reset:-"))
 
     print("\n4c. Текст без калмыцких букв")
     from core.fix_letters import fix_text
@@ -625,11 +703,16 @@ async def _check_ocr(dp, bot, session, storage):
     with storage._lock:
         row = dict(storage._conn.execute("SELECT * FROM requests ORDER BY id DESC LIMIT 1").fetchone())
     check(row["target"] == "ocr" and row["input_text"] == "photo:ph1", "запрос записан в базу как ocr с file_id")
-    # в текстовом режиме запятая — вертикальная форма ︐, на картинке и у модели — ᠂
-    expected = sample.todo.replace("︐", "᠂")
+    # по умолчанию знаков нет ни на картинке, ни в распознанном тексте
     got = (row["todo"] or "").replace("\n", " ")
-    ratio = difflib.SequenceMatcher(None, expected, got).ratio()
+    ratio = difflib.SequenceMatcher(None, sample.todo, got).ratio()
     check(ratio > 0.95, f"распознанный текст совпадает с нарисованным ({ratio:.1%})")
+
+    framed = ocr.recognize(png, overlay=False, punctuation="frame")
+    check(framed.todo.startswith("\u1800") and framed.todo.endswith("\u1805"),
+          "распознанное фото: бирга и четыре точки по настройке")
+    check("\u1800" not in framed.translit and framed.translit.endswith("."),
+          "в транслитерации бирги нет, четыре точки — точка")
 
     # Цвет: раньше картинка переводилась в серое, а фоном считалось «то, что
     # темнее 128 по краю». Жёлтое на оранжевом давало ореолы вместо букв,

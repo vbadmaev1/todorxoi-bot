@@ -31,6 +31,7 @@ from core import ocr as core_ocr
 from .. import formatting, keyboards, texts
 from ..config import Config
 from ..storage import Storage
+from .settings import load_punctuation
 from .translate import _PHOTO_MAX_RATIO, _send_patiently
 
 log = logging.getLogger(__name__)
@@ -105,11 +106,16 @@ async def read_image(
         "input_text": f"photo:{file_id}",
     }
 
+    punctuation = (
+        await load_punctuation(storage, user.id) if user else core_ocr.DEFAULT_PUNCT
+    )
     await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     try:
         data = (await message.bot.download(file_id)).getvalue()
         async with _lock:
-            res = await asyncio.to_thread(core_ocr.recognize, data, config.ocr_overlay)
+            res = await asyncio.to_thread(
+                core_ocr.recognize, data, config.ocr_overlay, punctuation
+            )
     except core_ocr.OcrUnavailable as exc:
         log.warning("распознавание фото недоступно: %s", exc)
         await storage.save_request(ok=False, error=f"ocr unavailable: {exc}", **base)
