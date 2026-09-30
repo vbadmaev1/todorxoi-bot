@@ -110,6 +110,9 @@ class Result:
     source_script: str
     translit: Optional[str] = None
     todo: Optional[str] = None
+    # кириллица из тодо бичиг или транслитерации (режим транслитерации),
+    # см. core/to_cyrillic.py; None — не считали или не получилось
+    cyrillic: Optional[str] = None
     # Листы картинки: [(io.BytesIO с PNG, (ширина, высота))]. Длинный текст
     # в одну картинку не влезает — см. render_todo_pages в todo_image.py.
     pages: list = field(default_factory=list)
@@ -193,6 +196,20 @@ def _to_translit(text: str, script: str, res: Result, fix_letters: bool = False)
     )
 
 
+def _to_cyrillic(translit: str, res: Result) -> Optional[str]:
+    t0 = time.perf_counter()
+    try:
+        from .to_cyrillic import to_cyrillic
+
+        out = to_cyrillic(translit)
+    except Exception:
+        # без моделей кириллицы режим работает как раньше
+        log.exception("перевод в кириллицу не удался")
+        out = None
+    res.steps_ms["кириллица"] = (time.perf_counter() - t0) * 1000
+    return out
+
+
 def _check_letters(text: str, res: Result, fix: bool) -> str:
     """Кириллица без калмыцких букв: исправить (если пользователь включил)
     или только заметить — тогда бот подскажет, что есть такая настройка."""
@@ -243,6 +260,10 @@ def process(
 
     if target == TARGET_TRANSLIT:
         res.translit = _to_translit(text, script, res, fix_letters)
+        if script in (SCRIPT_TODO, SCRIPT_TRANSLIT):
+            # обратно в кириллицу: для тодо бичиг — вместе с транслитерацией,
+            # для латиницы только это и есть результат
+            res.cyrillic = _to_cyrillic(res.translit, res)
 
     elif target == TARGET_FIX:
         if script != SCRIPT_CYRILLIC:

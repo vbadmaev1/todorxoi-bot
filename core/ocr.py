@@ -10,6 +10,9 @@ ocr.py — распознавание тодо бичиг с фото: карт�
      один поток. Как она получена из обученной — tools/export_ocr_onnx.py.
   3. Транслитерация — тем же todo_to_translit, что и в текстовых режимах;
      перед ней убираются висячие узкие пробелы, знаки — в латинские.
+  3а. Кириллица — core/to_cyrillic.py: сегментатор решает, какие слова
+     тодо бичиг складываются в одно кириллическое (oron du -> орнд), модель
+     переводит. ~15 мс на столбец; без её файлов ответ просто без кириллицы.
   4. Картинка-проверка: присланная картинка (выпрямленная, в своих цветах)
      с рамками и номерами столбцов. Видно, как бот разрезал страницу, и
      какая строка ответа какому столбцу соответствует. Стоит ~50 мс и один
@@ -23,6 +26,7 @@ ocr.py — распознавание тодо бичиг с фото: карт�
 
 import io
 import json
+import logging
 import math
 import os
 import re
@@ -37,6 +41,8 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from .punctuation import DEFAULT_PUNCT, apply_punctuation
 from .translit_todo import normalize_j, todo_to_translit
+
+log = logging.getLogger(__name__)
 
 _HERE = Path(__file__).resolve().parent
 _DEFAULT_MODEL = _HERE.parent / "model" / "todo_ocr_int8.onnx"
@@ -93,8 +99,29 @@ def tidy(text: str) -> str:
     return re.sub(" {2,}", " ", text).strip(" ")
 
 
+# Узкий пробел в транслитерации — дефис (kele-bēr). Модель распознавания
+# отличить его от обычного пробела на фото не может: она училась на разметке,
+# где дефисом из словаря отмечены куски одного кириллического слова, и ставит
+# узкий пробел почти в каждый промежуток — на странице с обычными пробелами
+# выходило «dēre-ügei-üzüülüqči-burxan-erdeni». Поэтому в транслитерации
+# распознанного текста любой промежуток — пробел. Какие куски на самом деле
+# одно кириллическое слово, решает уже не OCR. В тодо бичиг узкий пробел
+# остаётся: там он виден только как чуть меньший промежуток.
 def to_translit(todo: str) -> str:
-    return todo_to_translit(todo).translate(_PUNCT_TO_LATIN)
+    return todo_to_translit(todo.replace(" ", " ")).translate(_PUNCT_TO_LATIN)
+
+
+def to_cyrillic_columns(translit: list) -> list:
+    """Столбцы транслитерации -> столбцы кириллицы, одна строка к одной.
+    Кириллица — дополнение к ответу: если её модели нет или она упала,
+    распознавание всё равно отдаёт тодо бичиг и транслитерацию."""
+    try:
+        from .to_cyrillic import to_cyrillic
+        cyrillic = to_cyrillic("\n".join(translit)).split("\n")
+    except Exception:
+        log.exception("кириллица для распознанного текста не получилась")
+        return []
+    return cyrillic if len(cyrillic) == len(translit) else []
 
 
 class OcrError(Exception):
@@ -109,6 +136,7 @@ class OcrUnavailable(OcrError):
 class OcrResult:
     columns: list                          # тодо бичиг, по строке на столбец
     translit_columns: list
+    cyrillic_columns: list = field(default_factory=list)   # пусто — не получилось
     confidence: float = 1.0
     overlay: Optional[bytes] = None        # JPEG с рамками столбцов
     overlay_size: tuple = (0, 0)
@@ -123,6 +151,10 @@ class OcrResult:
     @property
     def translit(self) -> str:
         return "\n".join(self.translit_columns)
+
+    @property
+    def cyrillic(self) -> str:
+        return "\n".join(self.cyrillic_columns)
 
     @property
     def low_confidence(self) -> bool:
@@ -401,8 +433,12 @@ def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNC
     translit = [to_translit(t) for t in todo]
     steps["транслитерация"] = (time.perf_counter() - t0) * 1000
 
-    res = OcrResult(columns=todo, translit_columns=translit, confidence=confidence,
-                    angle=dbg["angle"], steps_ms=steps)
+    t0 = time.perf_counter()
+    cyrillic = to_cyrillic_columns(translit)
+    steps["кириллица"] = (time.perf_counter() - t0) * 1000
+
+    res = OcrResult(columns=todo, translit_columns=translit, cyrillic_columns=cyrillic,
+                    confidence=confidence, angle=dbg["angle"], steps_ms=steps)
     if overlay:
         t0 = time.perf_counter()
         if plate_box is not None:

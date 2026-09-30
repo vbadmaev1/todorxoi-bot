@@ -601,6 +601,28 @@ async def main():
     check("кириллицей" in m.text, "/fix на латинице — понятный отказ")
     await dp.feed_update(bot, msg("/translit"))
 
+    print("\n4e. Тодо бичиг и латиница -> кириллица")
+    from core import segmenter
+    from core.to_cyrillic import to_cyrillic
+
+    check(segmenter.segment("oron du takil") == [["oron", "du"], ["takil"]],
+          "сегментатор: oron du — одно кириллическое слово, takil — отдельное")
+    check(to_cyrillic("kele bēr") == "Келәр", f"kele bēr -> {to_cyrillic('kele bēr')}")
+    check(to_cyrillic("üge igi") == to_cyrillic("ügeyigi") == "Үгиг",
+          "üge igi и ügeyigi — одно и то же слово үгиг")
+    check(to_cyrillic("kele-bēr") == to_cyrillic("kele bēr"),
+          "дефис на входе — то же, что пробел")
+    await dp.feed_update(bot, msg(translit_to_todo("xalimaq ulus")))
+    _, m = session.last("SendMessage")
+    check("Кириллица" in m.text and "Хальмг улс" in m.text,
+          "тодо бичиг в режиме транслитерации: и транслитерация, и кириллица")
+    row = await storage.get_request(max_request_id(storage))
+    check(row["cyrillic"] == "Хальмг улс", "кириллица записана в базу")
+    await dp.feed_update(bot, msg("xalimaq ulus"))
+    _, m = session.last("SendMessage")
+    check("Кириллица" in m.text and "Хальмг улс" in m.text and "Транслитерация:" not in m.text,
+          "латиница: в ответе кириллица, без повтора транслитерации")
+
     print("\n5. Фидбэк: 👍")
     row = await storage.get_request(1)
     await dp.feed_update(bot, cb(f"fb:up:{row['id']}"))
@@ -713,6 +735,10 @@ async def _check_ocr(dp, bot, session, storage):
           "распознанное фото: бирга и четыре точки по настройке")
     check("\u1800" not in framed.translit and framed.translit.endswith("."),
           "в транслитерации бирги нет, четыре точки — точка")
+    check(ocr.to_translit("ᡍᡄᠯᡄ\u202fᡋᡄᡃᠷ") == "kele bēr",
+          "в транслитерации распознанного текста узкий пробел — пробел, не дефис")
+    check(len(framed.cyrillic_columns) == len(framed.columns) and framed.cyrillic.strip(),
+          "распознанное фото: кириллица по строке на столбец")
 
     # Цвет: раньше картинка переводилась в серое, а фоном считалось «то, что
     # темнее 128 по краю». Жёлтое на оранжевом давало ореолы вместо букв,

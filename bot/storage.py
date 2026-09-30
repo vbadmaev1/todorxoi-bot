@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS requests (
     input_text   TEXT    NOT NULL,
     translit     TEXT,
     todo         TEXT,
+    cyrillic     TEXT,               -- кириллица из тодо бичиг/транслитерации (фото, латиница)
     elapsed_ms   REAL,
     steps_json   TEXT,
     ok           INTEGER NOT NULL DEFAULT 1,
@@ -106,6 +107,7 @@ class Storage:
         "ALTER TABLE user_settings ADD COLUMN fix_letters TEXT",
         "ALTER TABLE requests ADD COLUMN letters_json TEXT",
         "ALTER TABLE user_settings ADD COLUMN punctuation TEXT",
+        "ALTER TABLE requests ADD COLUMN cyrillic TEXT",
     )
 
     def connect(self) -> None:
@@ -151,6 +153,7 @@ class Storage:
             "input_text": kw["input_text"],
             "translit": kw.get("translit"),
             "todo": kw.get("todo"),
+            "cyrillic": kw.get("cyrillic"),
             "elapsed_ms": kw.get("elapsed_ms"),
             "steps_json": json.dumps(kw.get("steps") or {}, ensure_ascii=False),
             "ok": 1 if kw.get("ok", True) else 0,
@@ -163,10 +166,10 @@ class Storage:
             cur = self._conn.execute(
                 """INSERT INTO requests
                    (created_at, user_id, username, chat_id, target, source_script,
-                    input_text, translit, todo, elapsed_ms, steps_json, ok, error,
-                    letters_json)
+                    input_text, translit, todo, cyrillic, elapsed_ms, steps_json, ok,
+                    error, letters_json)
                    VALUES (:created_at, :user_id, :username, :chat_id, :target,
-                           :source_script, :input_text, :translit, :todo,
+                           :source_script, :input_text, :translit, :todo, :cyrillic,
                            :elapsed_ms, :steps_json, :ok, :error, :letters_json)""",
                 row,
             )

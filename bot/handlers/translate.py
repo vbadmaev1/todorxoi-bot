@@ -81,6 +81,7 @@ async def handle_text(
         source_script=res.source_script,
         translit=res.translit,
         todo=res.todo,
+        cyrillic=res.cyrillic,
         elapsed_ms=res.elapsed_ms,
         steps=res.steps_ms,
         ok=True,
