@@ -7,7 +7,7 @@ from core import Result
 
 from . import texts
 
-TARGET_ICONS = {"translit": "🔤", "todo": "ᡐ", "image": "🖼"}
+TARGET_ICONS = {"translit": "🔤", "todo": "ᡐ", "image": "🖼", "fix": "✏️"}
 
 CAPTION_LIMIT = 1024
 MESSAGE_LIMIT = 4096
@@ -37,6 +37,8 @@ def render_result(res: Result) -> str:
     """Текст ответа для режимов «транслитерация» и «тодо бичиг»."""
     blocks = [_header(res)]
 
+    if res.target == "fix":
+        return _render_fix(res)
     if res.target == "translit":
         blocks.append(f"<code>{escape(res.translit or '')}</code>")
     else:
@@ -49,6 +51,19 @@ def render_result(res: Result) -> str:
     note = letters_note(res)
     if note:
         blocks.append(note)
+    blocks.append(timing_line(res))
+    return "\n\n".join(blocks)
+
+
+def _render_fix(res: Result) -> str:
+    """Режим /fix: исправленный текст целиком (его удобно скопировать) и
+    что именно поменялось."""
+    blocks = [_header(res)]
+    if res.letter_fixes:
+        blocks.append(f"{texts.FIX_TITLE}\n<code>{escape(res.fixed_text or '')}</code>")
+        blocks.append(letters_note(res))
+    else:
+        blocks.append(texts.FIX_NOTHING)
     blocks.append(timing_line(res))
     return "\n\n".join(blocks)
 

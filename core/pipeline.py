@@ -3,10 +3,12 @@
 pipeline.py — единая точка входа для бота: «дай текст и скажи, что нужно
 на выходе». Здесь же замеряется время работы каждого шага.
 
-Три сценария (ровно те, что в ТЗ бота):
+Четыре сценария:
   1. TARGET_TRANSLIT — калмыцкая кириллица -> транслитерация на латинице
   2. TARGET_TODO     — кириллица / транслитерация -> тодо бичиг (юникод)
   3. TARGET_IMAGE    — кириллица / транслитерация / тодо бичиг -> картинка
+  4. TARGET_FIX      — кириллица -> та же кириллица с исправленными
+                       калмыцкими буквами (см. core/fix_letters.py)
 
 Тип входного текста определяется автоматически (detect_script), так что
 пользователю не нужно ничего указывать руками.
@@ -33,6 +35,7 @@ log = logging.getLogger(__name__)
 TARGET_TRANSLIT = "translit"
 TARGET_TODO = "todo"
 TARGET_IMAGE = "image"
+TARGET_FIX = "fix"
 
 MAX_INPUT_CHARS = 10000
 
@@ -122,6 +125,8 @@ class Result:
     # что исправлено, если пользователь включил исправление в /settings.
     letters_flag: str = ""
     letter_fixes: list = field(default_factory=list)
+    # режим TARGET_FIX: исправленный текст
+    fixed_text: Optional[str] = None
     elapsed_ms: float = 0.0
     steps_ms: dict = field(default_factory=dict)
     stats: dict = field(default_factory=dict)
@@ -140,6 +145,8 @@ class Result:
         """Главный текстовый результат — то, что пойдёт в БД и в ответ."""
         if self.target == TARGET_TRANSLIT:
             return self.translit or ""
+        if self.target == TARGET_FIX:
+            return self.fixed_text or ""
         return self.todo or ""
 
 
@@ -233,6 +240,23 @@ def process(
 
     if target == TARGET_TRANSLIT:
         res.translit = _to_translit(text, script, res, fix_letters)
+
+    elif target == TARGET_FIX:
+        if script != SCRIPT_CYRILLIC:
+            raise PipelineError(
+                "Исправление работает с калмыцкой кириллицей: пришлите текст "
+                "кириллицей, например «Сян бяянт!»."
+            )
+        from . import fix_letters
+
+        t0 = time.perf_counter()
+        # человек сам попросил проверить текст — правим незнакомые слова,
+        # даже если текст в целом набран правильно
+        fixed = fix_letters.fix_text(text, force=True)
+        res.fixed_text = fixed.text
+        res.letters_flag = fixed.detection.flag
+        res.letter_fixes = fixed.fixes
+        res.steps_ms["буквы"] = (time.perf_counter() - t0) * 1000
 
     elif target == TARGET_TODO:
         if script == SCRIPT_TODO:

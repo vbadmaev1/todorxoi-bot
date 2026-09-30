@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import json
 import logging
 
 from aiogram import F, Router
@@ -94,6 +95,10 @@ async def handle_text(
 def _letters_log(res, enabled: bool):
     """Что записать в БД про калмыцкие буквы: по этим записям потом
     калибруются пороги core/fix_letters.py на настоящих запросах."""
+    if res.target == core.TARGET_FIX:
+        # исправленный текст нужен кнопкам «→ Транслитерация» и т.д.
+        return {"enabled": True, "flag": res.letters_flag, "fixes": res.letter_fixes,
+                "text": res.fixed_text}
     if not (res.letters_flag or res.letter_fixes):
         return None
     return {"enabled": enabled, "flag": res.letters_flag, "fixes": res.letter_fixes}
@@ -187,9 +192,20 @@ async def convert_further(
 
     await callback.answer()
     await handle_text(
-        callback.message, row["input_text"], target, storage, config,
+        callback.message, _source_text(row), target, storage, config,
         user=callback.from_user,
     )
+
+
+def _source_text(row: dict) -> str:
+    """Что переводить по кнопке под ответом: для режима /fix — уже
+    исправленный текст, для остальных — то, что прислал человек."""
+    if row.get("target") == core.TARGET_FIX and row.get("letters_json"):
+        try:
+            return json.loads(row["letters_json"]).get("text") or row["input_text"]
+        except ValueError:
+            pass
+    return row["input_text"]
 
 
 @router.callback_query(F.data == "noop")

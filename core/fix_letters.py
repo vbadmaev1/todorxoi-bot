@@ -23,7 +23,11 @@ fix_letters.py — калмыцкий текст, набранный без ка
      этом же тексте.
   4. Слово из словаря не меняется никогда: и «цаган», и «цаһан», и «дакад»,
      и «дәкәд» — настоящие слова, по буквам их не различить.
-  5. Если кандидатов нет, слово остаётся как есть — дальше его разберёт
+  5. Если целого слова в словаре нет, слово делится на основу и окончание:
+     основа ищется в словаре, окончание — среди окончаний, собранных из
+     словаря, причём гласные окончания согласуются с рядом основы
+     (дугарна -> дуһар + на -> дуһарна; не «нә»: основа твёрдая).
+  6. Если не нашлось и так, слово остаётся как есть — дальше его разберёт
      модель. Исправлять «с одной опечаткой» пробовали: незнакомое слово
      почти всегда просто отсутствует в словаре, а не опечатано, и такая
      правка была верной в 1% случаев.
@@ -106,11 +110,17 @@ SUB_COST = {
 }
 # во сколько раз дешевле замена, которую автор уже делал в этом тексте
 HABIT_DISCOUNT = 0.3
-# Русская передача вставляет гласную в стечение согласных: Җаңһр ->
-# Джангар, Хальмг -> Хальмаг. Одна такая вставка на слово.
-EPENTHESIS = {"а": 1.5, "ы": 1.5, "о": 1.5}
 # вес штрафа относительно log(частоты)
 COST_WEIGHT = 2.0
+# Разбор «основа + окончание»: окончание до 5 букв, основа от 3 букв и
+# встречалась не реже 3 раз, окончание встречалось после основ того же
+# ряда не реже 30 раз. Штраф за деление — чтобы целое словарное слово
+# всегда выигрывало у разобранного.
+SUFFIX_MAX = 5
+STEM_MIN = 3
+STEM_MIN_FREQ = 3
+SUFFIX_MIN_COUNT = 30
+SPLIT_PENALTY = 1.0
 
 
 def skeleton(w: str) -> str:
@@ -126,13 +136,21 @@ def skeleton(w: str) -> str:
 
 def _query_keys(w: str) -> Set[str]:
     keys = {w}
-    # вставная гласная: пробуем ключ без каждой из гласных а/ы/о
-    keys |= {w[:i] + w[i + 1:] for i, c in enumerate(w) if c in EPENTHESIS and 0 < i < len(w) - 1}
     if "дж" in w:
         keys.add(w.replace("дж", "ж"))
     if "нг" in w:
         keys |= {k.replace("нг", "н") for k in list(keys)}
     return {skeleton(k) for k in keys}
+
+
+def vowel_row(w: str) -> str:
+    """Ряд слова по гласным: 'b' — задний (а о у), 'f' — передний (ә ө ү е
+    э), 'n' — только и, 'm' — смешанный (заимствования). От ряда основы
+    зависят гласные окончания и выбор г/һ, к/х: перед а, у почти всегда
+    пишется һ и х, перед е — только г и к."""
+    body = w.replace("я", "а").replace("ю", "у").replace("ё", "о")
+    back, front = bool(set(body) & set("аоуы")), bool(set(body) & set("әөүеэ"))
+    return "m" if back and front else "b" if back else "f" if front else "n"
 
 
 def channel(v: str, w: str) -> Optional[Tuple[float, Tuple]]:
@@ -153,10 +171,6 @@ def channel(v: str, w: str) -> Optional[Tuple[float, Tuple]]:
                     best = (c, res[1] + ((sub,) if sub else ()))
 
         ch = v[i]
-        if (j < len(w) and w[j] in EPENTHESIS and i > 0 and v[i - 1] in CONS
-                and ch in CONS):
-            # лишняя гласная между двумя согласными правильного слова
-            take(go(i, j + 1), EPENTHESIS[w[j]], ("+", w[j]))
         if j < len(w) and w[j] == ch:
             take(go(i + 1, j + 1), 0.0, None)
         for rep, cost in SUB_COST.get(ch, {}).items():
@@ -232,15 +246,37 @@ class FixResult:
 
 
 class LetterFixer:
-    def __init__(self, vocab: Dict[str, int], protected: Iterable[str] = ()):
+    def __init__(self, vocab: Dict[str, int], protected: Iterable[str] = (),
+                 trusted: Iterable[str] = ()):
         # vocab: правильное слово -> частота; protected — русские слова,
         # которые встречаются в калмыцких текстах (гражданск, доктор): их
-        # «исправлять» нельзя, хотя они похожи на калмыцкие без спецбукв
+        # «исправлять» нельзя, хотя они похожи на калмыцкие без спецбукв;
+        # trusted — слова проверенного словаря модели: годятся в основы,
+        # даже если в корпусе встретились всего раз
         self.freq = vocab
         self.protected = set(protected)
+        self.trusted = set(trusted)
         self.index: Dict[str, List[str]] = {}
         for v in vocab:
             self.index.setdefault(skeleton(v), []).append(v)
+        self._build_suffixes()
+
+    def _build_suffixes(self) -> None:
+        """Окончания из самого словаря: слово = словарная основа + хвост.
+        Считаются отдельно для основ каждого ряда: у твёрдой основы «-на»,
+        у мягкой «-нә»."""
+        counts: Counter = Counter()
+        for v, n in self.freq.items():
+            if "-" in v:
+                continue
+            for k in range(max(STEM_MIN, len(v) - SUFFIX_MAX), len(v)):
+                stem = v[:k]
+                if self._good_stem(stem):
+                    counts[(vowel_row(stem), v[k:])] += n
+        self.suffixes = {k: n for k, n in counts.items() if n >= SUFFIX_MIN_COUNT}
+        self.suffix_index: Dict[str, Set[str]] = {}
+        for _, x in self.suffixes:
+            self.suffix_index.setdefault(skeleton(x), set()).add(x)
 
     # ------------------------------------------------------------ кандидаты
     def candidates(self, w: str, habits: Optional[Counter] = None):
@@ -293,7 +329,7 @@ class LetterFixer:
         toks = _WORD.findall(norm)
         n_special = sum(ch in SPECIAL for ch in norm)
         for w in toks:
-            if w in self.freq or w in self.protected:
+            if w in self.freq or self.is_russian_word(w):
                 continue
             if _HARD_OOV.search(w):
                 d.reasons["жёсткий"] += 1
@@ -311,13 +347,17 @@ class LetterFixer:
             d.flag = "partial"
         return d
 
-    def fix(self, text: str) -> FixResult:
+    def fix(self, text: str, force: bool = False) -> FixResult:
         """Исправить текст, если он написан без спецбукв. Правильный текст
-        (спецбуквы на месте, триггеры молчат) и русский не трогаем."""
+        (спецбуквы на месте, триггеры молчат) и русский не трогаем.
+
+        force=True — человек сам попросил проверить текст (режим /fix):
+        незнакомые слова исправляются, даже если текст в целом написан
+        правильно. Русский текст и словарные слова не трогаются и тут."""
         det = self.detect(text)
         norm = normalize_lookalikes(text)
         res = FixResult(text=norm, detection=det)
-        if det.russian or not det.flag:
+        if det.russian or not (det.flag or force):
             if norm != unicodedata.normalize("NFC", text):
                 res.fixes = _diff_words(text, norm)
             return res
@@ -327,7 +367,7 @@ class LetterFixer:
         habits: Counter = Counter()
         for m in tokens:
             w = m.group(0).lower()
-            if w in self.freq or w in self.protected:
+            if w in self.freq or self.is_russian_word(w):
                 continue
             c = self.candidates(w)
             if len(c) == 1 or (len(c) > 1 and c[0][1] - c[1][1] > 2):
@@ -339,7 +379,12 @@ class LetterFixer:
             orig = m.group(0)
             w = orig.lower()
             new = w
-            if w not in self.freq and w not in self.protected:
+            # В правильно набранном тексте (проверка по просьбе, force)
+            # слово с заглавной не в начале предложения — скорее имя:
+            # Кензеев, Юра, Сарангов. В тексте без спецбукв имена испорчены
+            # так же, как всё остальное (Пюрвя), и их чиним.
+            name = not det.flag and orig[:1].isupper() and not _sentence_start(norm, m.start())
+            if w not in self.freq and not self.is_russian_word(w) and not name:
                 new = self._restore(w, habits)
             out.append(norm[pos:m.start()])
             out.append(_match_case(orig, new) if new != w else orig)
@@ -357,7 +402,43 @@ class LetterFixer:
             # составное слово: чиним части по отдельности
             parts = [p if p in self.freq else self._restore(p, habits) for p in w.split("-")]
             return "-".join(parts)
-        return w
+        return self._restore_split(w, habits)
+
+    def is_russian_word(self, w: str) -> bool:
+        """Русское слово из калмыцких текстов — само или с калмыцким
+        окончанием до 4 букв: машин-ас, поезд-ар, Сталинград-т."""
+        if w in self.protected:
+            return True
+        return any(w[:k] in self.protected for k in range(max(4, len(w) - 4), len(w)))
+
+    def _good_stem(self, stem: str) -> bool:
+        return self.freq.get(stem, 0) >= STEM_MIN_FREQ or stem in self.trusted
+
+    def _restore_split(self, w: str, habits: Counter) -> str:
+        """Основа из словаря + окончание, согласованное с её рядом."""
+        best, best_score = w, None
+        for k in range(max(STEM_MIN, len(w) - SUFFIX_MAX), len(w)):
+            s, x = w[:k], w[k:]
+            stems = [c for c in self.candidates(s, habits) if self._good_stem(c[0])][:3]
+            if not stems:
+                continue
+            tails = {t for key in _query_keys(x) for t in self.suffix_index.get(key, ())}
+            for stem, stem_score, _ in stems:
+                row = vowel_row(stem)
+                for t in tails:
+                    n = self.suffixes.get((row, t))
+                    r = channel(t, x) if n else None
+                    if r is None:
+                        continue
+                    score = stem_score + math.log(n) - COST_WEIGHT * r[0] - SPLIT_PENALTY
+                    if best_score is None or score > best_score:
+                        best, best_score = stem + t, score
+        return best
+
+
+def _sentence_start(text: str, pos: int) -> bool:
+    before = text[:pos].rstrip(" \t«\"'(—–-")
+    return not before or before[-1] in ".!?\n…"
 
 
 def _match_case(orig: str, new: str) -> str:
@@ -379,10 +460,11 @@ def _diff_words(before: str, after: str) -> List[Tuple[str, str]]:
 # --------------------------------------------------------------------------
 # Загрузка
 # --------------------------------------------------------------------------
-def load_vocab(path) -> Tuple[Dict[str, int], Set[str]]:
-    """Файл: слово<TAB>частота<TAB>k|r (k — калмыцкое, r — русское
-    слово из калмыцких текстов, его не трогаем)."""
-    vocab, protected = {}, set()
+def load_vocab(path) -> Tuple[Dict[str, int], Set[str], Set[str]]:
+    """Файл: слово<TAB>частота<TAB>d|k|r. d — слово из проверенного словаря
+    модели, k — из корпуса, r — русское слово из калмыцких текстов, его не
+    трогаем. -> (частоты, русские, проверенные)."""
+    vocab, protected, trusted = {}, set(), set()
     with gzip.open(path, "rt", encoding="utf-8") as fh:
         for line in fh:
             word, n, kind = line.rstrip("\n").split("\t")
@@ -390,7 +472,9 @@ def load_vocab(path) -> Tuple[Dict[str, int], Set[str]]:
                 protected.add(word)
             else:
                 vocab[word] = int(n)
-    return vocab, protected
+                if kind == "d":
+                    trusted.add(word)
+    return vocab, protected, trusted
 
 
 _fixer: Optional[LetterFixer] = None
@@ -405,8 +489,8 @@ def get_fixer() -> LetterFixer:
     return _fixer
 
 
-def fix_text(text: str) -> FixResult:
-    return get_fixer().fix(text)
+def fix_text(text: str, force: bool = False) -> FixResult:
+    return get_fixer().fix(text, force=force)
 
 
 def detect(text: str) -> Detection:

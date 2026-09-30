@@ -42,7 +42,8 @@ def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=texts.BTN_TRANSLIT), KeyboardButton(text=texts.BTN_TODO)],
-            [KeyboardButton(text=texts.BTN_IMAGE), KeyboardButton(text=texts.BTN_HELP)],
+            [KeyboardButton(text=texts.BTN_IMAGE), KeyboardButton(text=texts.BTN_FIX)],
+            [KeyboardButton(text=texts.BTN_HELP)],
         ],
         resize_keyboard=True,
         input_field_placeholder="Пришлите калмыцкий текст…",
@@ -54,13 +55,25 @@ def result_keyboard(request_id: int, target: str, with_feedback: bool = True):
     rows = []
 
     convert = []
+    if target == "fix":
+        # исправленный текст — сразу дальше, в любой из трёх записей
+        convert.append(
+            InlineKeyboardButton(
+                text="→ Транслитерация", callback_data=f"{CB_CONVERT}:translit:{request_id}"
+            )
+        )
+        convert.append(
+            InlineKeyboardButton(
+                text="→ Тодо бичиг", callback_data=f"{CB_CONVERT}:todo:{request_id}"
+            )
+        )
     if target == "translit":
         convert.append(
             InlineKeyboardButton(
                 text="→ Тодо бичиг", callback_data=f"{CB_CONVERT}:todo:{request_id}"
             )
         )
-    if target in ("translit", "todo"):
+    if target in ("translit", "todo", "fix"):
         convert.append(
             InlineKeyboardButton(
                 text="→ Картинка", callback_data=f"{CB_CONVERT}:image:{request_id}"

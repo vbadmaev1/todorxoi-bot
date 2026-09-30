@@ -37,8 +37,8 @@ def noisy(text):
 
 
 for name, held_books, seed in SAMPLES:
-    vocab, protected, _ = build_vocab(CORP, NPZ, exclude_books=held_books)
-    fx = LetterFixer(vocab, protected)
+    vocab, protected, _, trusted = build_vocab(CORP, NPZ, exclude_books=held_books)
+    fx = LetterFixer(vocab, protected, trusted)
     held = []
     for line in open(CORP):
         r = json.loads(line)
@@ -70,6 +70,12 @@ for name, held_books, seed in SAMPLES:
     for k, v in why_ex.items():
         for e in v:
             print(f'       [{k}] {e}')
+    # явная проверка (режим /fix): незнакомые слова правятся и в правильном тексте
+    forced = collections.Counter()
+    for t in sample:
+        forced.update(fx.fix(t, force=True).fixes)
+    print(f'  правильные, режим /fix: изменено слов {sum(forced.values())} ({100*sum(forced.values())/toks:.3f}%)')
+    print('    ', [f'{a}→{b}' for (a, b), _ in forced.most_common(30)])
     rf = sum(bool(fx.detect(s).flag) for s in RU_TEXT)
     print(f'  русский текст: помечено {100*rf/len(RU_TEXT):.1f}%')
 
