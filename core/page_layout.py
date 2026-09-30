@@ -9,8 +9,10 @@ page_layout.py — разметка страницы с вертикальным
 столбец, между столбцами пыль скана, колонтитул и номер страницы идут
 поперёк — и вся страница уходила в модель одним «столбцом». Здесь иначе:
 
-1. бинаризация (для фото — с выравниванием фона); пыль — компоненты меньше
-   трети типичной точки на этой же картинке;
+1. перевод в серое с учётом цвета (to_gray: текст тёмный, фон светлый),
+   бинаризация (для фото — с выравниванием фона); пыль — компоненты меньше
+   трети типичной точки на этой же картинке; сплошные пятна (стол вокруг
+   страницы, тень, чёрная полоса) — тоже прочь;
 2. наклон: угол, при котором вертикальная проекция чернил самая «резкая»
    (±5°);
 3. столбцы — по стержням букв: у тодо бичиг в каждом столбце вертикальная
@@ -49,12 +51,105 @@ def _otsu(v):
     return int(np.argmax(between))
 
 
+def _separability(v):
+    """Насколько хорошо значения делятся на два класса (текст и фон): доля
+    межклассовой дисперсии при пороге Оцу, от 0 до 1."""
+    v = np.clip(v, 0, 255).astype(np.uint8)
+    t = _otsu(v)
+    lo, hi = v[v <= t], v[v > t]
+    if not len(lo) or not len(hi) or v.var() == 0:
+        return 0.0
+    w = len(lo) / v.size
+    return float(w * (1 - w) * (hi.mean() - lo.mean()) ** 2 / v.var())
+
+
+def _stretch(x, sample):
+    lo, hi = np.percentile(sample, [0.5, 99.5])
+    if hi - lo < 1:
+        return np.full(x.shape, 255, np.uint8)
+    return np.clip((x - lo) * (255 / (hi - lo)), 0, 255).astype(np.uint8)
+
+
+def to_gray(img):
+    """Любая картинка -> серое uint8, где текст тёмный, а фон светлый.
+
+    Раньше здесь было img.convert("L") и «фон тёмный, если края темнее 128».
+    На цветном это ломалось двумя способами:
+      • полярность — жёлтый текст на оранжевом в сером даёт 227 на 155: текст
+        светлее фона, но и фон «светлый» (больше 128), поэтому текст шёл за
+        фон, а за буквы принимались ореолы вокруг них. Так же чёрное на синем
+        (фон 29 — «тёмный», переворачивалось зря);
+      • контраст — у красного на зелёном яркость почти одинаковая, в сером
+        букв не видно вовсе.
+    Поэтому:
+      1. прозрачность: текст на прозрачном фоне — это сам альфа-канал;
+         прозрачные поля вокруг картинки заливаются её же цветом;
+      2. из двух проекций цвета — яркость и главная ось разброса цветов
+         (PCA по RGB) — берётся та, что лучше делит пиксели на два класса;
+      3. текст — класс из тонких штрихов (см. _text_is_light); его делаем
+         тёмным, фон светлым.
+    Из 100 сочетаний цветов текста и фона из палитры бота раньше читались 69.
+    """
+    if img.mode in ("1", "L", "I", "I;16", "F"):
+        g = np.asarray(img.convert("L"), dtype=np.float32)
+        candidates = [g]
+        k = max(1, round((g.size / 250_000) ** 0.5))
+        samples = [g[::k, ::k].ravel()]
+    else:
+        has_alpha = "A" in img.mode or "transparency" in img.info
+        rgba = np.asarray(img.convert("RGBA" if has_alpha else "RGB"), dtype=np.float32)
+        rgb = rgba[..., :3]
+        if has_alpha:
+            alpha = rgba[..., 3:] / 255.0
+            opaque = alpha[..., 0] > 0.5
+            if 0 < opaque.mean() < 0.5:
+                # непрозрачного мало — это и есть надпись на прозрачном фоне
+                return (255 - alpha[..., 0] * 255).astype(np.uint8)
+            if opaque.mean() < 1:
+                fill = np.median(rgb[opaque], axis=0) if opaque.any() else np.full(3, 255.0)
+                rgb = rgb * alpha + fill * (1 - alpha)
+        k = max(1, round((rgb.shape[0] * rgb.shape[1] / 250_000) ** 0.5))
+        pix = rgb[::k, ::k].reshape(-1, 3)
+        weights = np.array([0.299, 0.587, 0.114], np.float32)
+        candidates, samples = [rgb @ weights], [pix @ weights]
+        cov = np.cov(pix.T)
+        if np.trace(cov) > 1:
+            axis = np.linalg.eigh(cov)[1][:, -1].astype(np.float32)   # направление наибольшего разброса
+            candidates.append(rgb @ axis)
+            samples.append(pix @ axis)
+    stretched = [_stretch(s, s) for s in samples]
+    scores = [_separability(s) for s in stretched]
+    # яркость — если цветовая ось не заметно лучше: у обычных фото и сканов так надёжнее
+    best = 1 if len(scores) > 1 and scores[1] > scores[0] + 0.05 else 0
+    g = _stretch(candidates[best], samples[best])
+    return 255 - g if _text_is_light(g) else g
+
+
+def _median_run(b):
+    """Медиана длин горизонтальных отрезков True в двумерном массиве."""
+    d = np.diff(np.pad(b, ((0, 0), (1, 1))).astype(np.int8), axis=1).ravel()
+    runs = np.flatnonzero(d == -1) - np.flatnonzero(d == 1)
+    return float(np.median(runs)) if len(runs) else 0.0
+
+
+def _text_is_light(g):
+    """Текст — тот из двух классов, что состоит из тонких штрихов: его
+    горизонтальные отрезки — поперечники штрихов, а у фона — промежутки между
+    буквами и поля, они длиннее. Ни «чего больше», ни «какого цвета край» так
+    не работают: на фото страницы тёмный стол вокруг занимает полкадра и весь
+    край. Если отрезки почти равны — фон тот, чего больше."""
+    k = max(1, round((g.size / 1_000_000) ** 0.5))
+    small = g[::k, ::k]
+    light = small > _otsu(small)
+    dark_run, light_run = _median_run(~light), _median_run(light)
+    if dark_run and light_run and not 0.8 < dark_run / light_run < 1.25:
+        return light_run < dark_run
+    return np.count_nonzero(light) < 0.5 * light.size
+
+
 def binarize(img):
     """-> (чернила bool (H, W), серое uint8 с белым фоном и тёмным текстом)."""
-    g = np.asarray(img.convert("L"), dtype=np.uint8)
-    border = np.concatenate([g[:4].ravel(), g[-4:].ravel(), g[:, :4].ravel(), g[:, -4:].ravel()])
-    if np.median(border) < 128:                                   # светлый текст на тёмном фоне
-        g = 255 - g
+    g = to_gray(img)
     sample = g[::5, ::5]
     if np.count_nonzero((sample > 40) & (sample < 215)) < 0.01 * sample.size:
         return g < 128, g                                         # уже чёрно-белое (скан 1 бит и т. п.)
@@ -75,6 +170,22 @@ def stroke_width(ink):
     return float(np.median(runs)) if len(runs) else 3.0
 
 
+def text_stroke_width(ink, lab, area):
+    """Толщина штриха с поправкой на шум. Медиана по всем отрезкам (stroke_width) считает каждую пылинку
+    наравне с буквой: на фото крупного слова на фоне ткани тысячи точек фактуры дают 4 px при штрихе
+    букв в 40 px — и слово целиком уходило в «сплошные пятна» (solid_components) как стол вокруг страницы.
+    Поэтому то же самое считается ещё и по крупным компонентам (верхние 10% по площади); если выходит
+    вдвое толще — берём это. На страницах и сканах обе оценки совпадают, там ничего не меняется."""
+    s = stroke_width(ink)
+    if len(area) > 2:
+        big = area >= np.percentile(area[1:], 90)
+        big[0] = False
+        s_big = stroke_width(big[lab] & ink)
+        if s_big >= 2 * s:
+            return s_big
+    return s
+
+
 def speck_area(area, s):
     """Порог пыли. Точки у букв и знаков препинания в разных шрифтах от 0.15 до 0.8 s² (жирный шрифт — мелкие точки
     относительно штриха), поэтому порог — треть типичной точки на этой же картинке, а не доля от толщины штриха."""
@@ -82,6 +193,35 @@ def speck_area(area, s):
     if len(dots) >= 5:
         return max(3.0, 0.35 * float(np.median(dots)))
     return max(3.0, 0.08 * s * s)
+
+
+def solid_components(lab, ink, s):
+    """Метки компонент, которые не буквы, а сплошные пятна: стол или тень вокруг
+    сфотографированной страницы, чёрная полоса скана, линейка. У буквы любой
+    горизонтальный отрезок — это поперечник штриха (≈ s), у пятна отрезки во всю
+    его ширину. Без этого тёмный стол вокруг страницы становился одной огромной
+    «буквой», и вся страница сливалась в один столбец."""
+    starts = ink & ~np.pad(ink, ((0, 0), (1, 0)))[:, :-1]         # начало каждого горизонтального отрезка
+    runs = np.bincount(lab[starts], minlength=lab.max() + 1)
+    area = np.bincount(lab.ravel(), minlength=lab.max() + 1)
+    mean_run = area / np.maximum(runs, 1)
+    solid = (mean_run > 5 * s) & (area > 20 * s * s)
+    solid[0] = False
+    # Но толщину s задаёт самый частый шрифт: на афише рядом с мелкой кириллицей крупная каллиграфия
+    # тодо бичиг — «пятно» по этому правилу. Пятна, ради которых оно заведено, либо касаются края
+    # кадра, либо тянутся через большую его часть, либо залиты сплошь (отрезок во всю ширину);
+    # слово — ни то, ни другое, ни третье.
+    H, W = lab.shape
+    objs = ndi.find_objects(lab)
+    for i in np.flatnonzero(solid):
+        sy, sx = objs[i - 1]
+        h, w = sy.stop - sy.start, sx.stop - sx.start
+        edge = sy.start == 0 or sx.start == 0 or sy.stop == H or sx.stop == W
+        wide = h >= 0.6 * H or w >= 0.6 * W
+        filled = mean_run[i] >= 0.5 * w
+        if not (edge or wide or filled):
+            solid[i] = False
+    return solid
 
 
 # ---------------------------------------------------------------- наклон
@@ -102,18 +242,67 @@ def estimate_skew(ink, max_angle=5.0):
 
 # ---------------------------------------------------------------- столбцы
 
+def _has_spine(ink, x, s):
+    """Есть ли у x сплошная вертикаль чернил длиннее трёх толщин штриха."""
+    r = max(1, int(round(s)))
+    rows = ink[:, max(0, x - r):x + r + 1].any(1)
+    d = np.diff(np.concatenate([[0], rows.astype(np.int8), [0]]))
+    runs = np.flatnonzero(d == -1) - np.flatnonzero(d == 1)
+    return bool(len(runs)) and runs.max() >= 3 * s
+
+
+def _spine_profile(ink, s):
+    """Сколько в каждом x пикселей из вертикальных серий чернил длиннее трёх штрихов (стержни, края)."""
+    col = np.pad(ink, ((1, 1), (0, 0))).astype(np.int8)
+    d = np.diff(col, axis=0)
+    out = np.zeros(ink.shape[1], np.float32)
+    ys, xs = np.nonzero(d == 1)
+    ye, xe = np.nonzero(d == -1)                                  # в каждом x начала и концы идут парами по порядку
+    o1, o2 = np.lexsort((ys, xs)), np.lexsort((ye, xe))
+    L = ye[o2] - ys[o1]
+    long = L >= 3 * s
+    np.add.at(out, xs[o1][long], L[long])
+    return out
+
+
 def find_cuts(ink, s):
     """x-координаты границ между столбцами (по минимумам проекции между стержнями)."""
     prof = ndi.uniform_filter1d(ink.sum(0).astype(np.float32), size=max(3, int(round(s))))
     if prof.max() <= 0:
         return []
     top = np.percentile(prof[prof > 0], 95)
-    peaks, _ = find_peaks(prof, prominence=0.3 * top, height=0.25 * top, distance=max(2, int(3 * s)))
-    cuts = []
+    # Высота пика растёт с длиной столбца, поэтому один порог от самого
+    # высокого столбца терял короткие: последний столбец из одного слова в 5–10
+    # раз ниже остальных и сливался с соседом. Поэтому пик — столбец, если он
+    #   • высокий (как раньше), или
+    #   • хорошо отделён от соседей (провал рядом глубже половины его высоты)
+    #     и под ним есть стержень — сплошная вертикаль длиннее трёх штрихов.
+    # Без стержня отделённый пик — это столбик точек или знаков сбоку от оси
+    # (в шрифте zakaa они справа), а не столбец.
+    peaks, props = find_peaks(prof, prominence=0.02 * top, height=0.05 * top, distance=max(2, int(3 * s)))
+    tall = (props["prominences"] >= 0.3 * top) & (props["peak_heights"] >= 0.25 * top)
+    apart = props["prominences"] >= 0.5 * props["peak_heights"]
+    peaks = peaks[tall | (apart & np.array([_has_spine(ink, x, s) for x in peaks], bool))]
+    cuts, spines = [], None
     for a, b in zip(peaks[:-1], peaks[1:]):
         x = a + int(np.argmin(prof[a:b]))
         if prof[x] <= 0.3 * min(prof[a], prof[b]):              # настоящий промежуток, а не провал внутри столбца
             cuts.append(x)
+            continue
+        # На фото поперёк кадра идут тонкие линии (края крыши, перила), и промежуток до нуля не падает;
+        # а мелкий пик рядом (угол здания) делает провал «неглубоким» относительно себя. Но полоса шире
+        # трёх штрихов совсем без стержней — вертикальных серий чернил длиннее трёх штрихов — не столбец:
+        # у столбца тодо бичиг стержень идёт через всю высоту. Режем в самом пустом месте такой полосы.
+        if spines is None:
+            spines = _spine_profile(ink, s)
+        low = np.concatenate([[0], (spines[a:b] == 0).astype(np.int8), [0]])
+        d = np.diff(low)
+        starts, ends = np.flatnonzero(d == 1), np.flatnonzero(d == -1)
+        if len(starts):
+            i = int(np.argmax(ends - starts))
+            if ends[i] - starts[i] >= 3 * s:
+                x0, x1 = a + starts[i], a + ends[i]
+                cuts.append(x0 + int(np.argmin(prof[x0:x1])))
     return cuts
 
 
@@ -247,17 +436,135 @@ def render_column(pieces, gray, pad):
     return Image.fromarray(out), (x0 - p, y0 - p, x1 + p, y1 + p)
 
 
+def _disk(r):
+    return np.hypot(*np.mgrid[-r:r + 1, -r:r + 1]) <= r
+
+
+def _close(mask, r):
+    """Замыкание кругом радиуса r через преобразование расстояний: то же, что binary_closing с _disk(r),
+    но за линейное время — у большого круга binary_closing на кадре идёт секундами."""
+    grown = ndi.distance_transform_edt(~np.pad(mask, r)) <= r
+    return (ndi.distance_transform_edt(grown) > r)[r:-r, r:-r]
+
+
+def find_plates(img, max_plates=6):
+    """Надпись на предмете: кулон, табличка, татуировка на руке, обложка на столе. -> [(картинка, рамка в img) ...].
+
+    split_page считает, что кадр — это страница. Когда надпись — лишь часть кадра, а фон пёстрый (ткань,
+    кожа дивана, цепочка), фон распадается на «чернила», полярность выбирается по нему, а сама поверхность
+    с надписью становится одним сплошным пятном с дырками-буквами — и выкидывается как стол вокруг страницы.
+
+    Здесь поверхность ищут именно как такое пятно:
+      1. глобальный порог Оцу по яркости, посчитанный на размытой медианой копии (мелкая фактура не
+         сдвигает порог); не binarize — её деление на местный фон превращает тени на коже в дырки;
+      2. обе полярности, размыкание кругом ~1/60 кадра — отрываются тонкие перемычки и фактура;
+      3. у пятна закрываются дырки (после замыкания кругом в 1/6 пятна — иначе буква у края,
+         открытая наружу, дыркой не считается); дырки — кандидаты в надпись, их должно быть
+         от 1 до 50% площади;
+      4. вырезается рамка вокруг дырок с запасом, всё вне пятна заливается его цветом, чтобы край
+         поверхности и фон не стали штрихами.
+    Лишнее (складки, соседний кусок фона) отсеивает уже модель по уверенности — см. core/ocr.py."""
+    rgb = img.convert("RGB")
+    k = min(1.0, 600 / max(rgb.size))
+    small = rgb.resize((max(1, round(rgb.width * k)), max(1, round(rgb.height * k))), Image.BILINEAR)
+    g = np.asarray(small.convert("L"))
+    r = max(2, round(min(g.shape) / 60))
+    t = _otsu(ndi.median_filter(g, size=2 * r + 1))
+    found = []
+    for mask in (g > t, g <= t):
+        lab, _ = ndi.label(ndi.binary_opening(mask, _disk(r)))
+        area = np.bincount(lab.ravel())
+        for i, sl in enumerate(ndi.find_objects(lab), 1):
+            if sl is None or not 0.005 * lab.size <= area[i] <= 0.7 * lab.size:
+                continue
+            comp = lab[sl] == i
+            R = max(2, round(min(comp.shape) / 6))
+            closed = ndi.binary_fill_holes(_close(comp, R)) | comp
+            hl, _ = ndi.label(closed & ~comp)
+            ha = np.bincount(hl.ravel())
+            ha[0] = 0
+            if not 0.01 * closed.sum() <= ha.sum() <= 0.5 * closed.sum():
+                continue
+            ys, xs = np.nonzero((ha >= max(4, 0.02 * ha.max()))[hl])   # крошки не раздвигают рамку
+            found.append((int(ha.sum()), sl, closed, (ys.min(), ys.max() + 1, xs.min(), xs.max() + 1)))
+    arr = np.asarray(rgb)
+    out = []
+    for _, sl, closed, (hy0, hy1, hx0, hx1) in sorted(found, key=lambda f: -f[0])[:max_plates]:
+        mg = round(0.15 * max(hx1 - hx0, (hy1 - hy0) / 8))
+        hy0, hx0 = max(0, hy0 - mg), max(0, hx0 - mg)
+        hy1, hx1 = min(closed.shape[0], hy1 + mg), min(closed.shape[1], hx1 + mg)
+        oy, ox = sl[0].start, sl[1].start
+        x0, y0 = round((ox + hx0) / k), round((oy + hy0) / k)
+        x1, y1 = min(rgb.width, round((ox + hx1) / k)), min(rgb.height, round((oy + hy1) / k))
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            continue
+        # маска поверхности в полном разрешении, чуть уже — чтобы её кромка не стала штрихом
+        m = np.asarray(Image.fromarray(closed[hy0:hy1, hx0:hx1].astype(np.uint8) * 255)
+                       .resize((x1 - x0, y1 - y0), Image.BILINEAR)) > 127
+        m = ndi.binary_erosion(m, iterations=max(1, round(0.03 * min(m.shape))))
+        if not m.any():
+            continue
+        crop = arr[y0:y1, x0:x1]
+        fill = np.median(crop[m], axis=0).astype(np.uint8)
+        out.append((Image.fromarray(np.where(m[..., None], crop, fill)), (x0, y0, x1, y1)))
+    return out
+
+
+def horizontal_text(lab, n):
+    """-> bool по меткам: компоненты, из которых сложены горизонтальные строки — кириллица, латиница, цифры
+    на афише, вывеске, обложке рядом с надписью тодо бичиг. Такие строки давали свои пики в проекции,
+    сбивали толщину штриха (у мелкого шрифта он тоньше) и срастались со столбцами тодо в один «столбец».
+
+    Буква горизонтального письма — отдельное пятно, не вытянутое вверх; буквы одного кегля стоят рядом
+    в длинный ряд. Слово тодо бичиг — одно высокое пятно, а его точки и знаки идут друг под другом.
+    Поэтому: пятна не выше полутора ширин разбиваются по классам высоты (с перекрытием, чтобы строка из
+    заглавных и строчных не рвалась), в каждом классе расширяются вбок на свою высоту; ряд шире шести
+    своих высот из хотя бы четырёх пятен — строка."""
+    sl = ndi.find_objects(lab)
+    h = np.array([0] + [s[0].stop - s[0].start if s else 0 for s in sl]); w = np.array([0] + [s[1].stop - s[1].start if s else 0 for s in sl])
+    cand = (h >= 4) & (h <= 1.5 * w + 2)                     # не вытянутые вверх
+    out = np.zeros(n + 1, bool)
+    if not cand.any():
+        return out
+    lo = h[cand].min()
+    b = 0
+    while lo * 2 ** b <= h[cand].max():
+        # класс высоты [lo·2^b, lo·2^(b+2)) — перекрываются, чтобы строка из букв разной высоты не рвалась
+        sel = cand & (h >= lo * 2 ** b) & (h < lo * 2 ** (b + 2))
+        b += 1
+        if sel.sum() < 4:
+            continue
+        hc = float(np.median(h[sel]))
+        m = sel[lab]
+        k = max(2, int(round(1.0 * hc)))
+        rl, _ = ndi.label(ndi.binary_dilation(m, structure=np.ones((1, 2 * k + 1), bool)))
+        for j, s_ in enumerate(ndi.find_objects(rl), 1):
+            if s_ is None:
+                continue
+            rh, rw = s_[0].stop - s_[0].start, s_[1].stop - s_[1].start
+            comps = np.unique(lab[s_][(rl[s_] == j) & m[s_]])
+            comps = comps[comps > 0]
+            if rw >= 6 * rh and len(comps) >= 4:
+                out[comps] = True
+    return out
+
 def split_page(img, pad=0.1, deskew=True, debug=False):
     """Страница (PIL) -> [столбец PIL ...] слева направо. debug=True -> (столбцы, словарь с промежуточными данными)."""
     ink, gray = binarize(img)
-    s = stroke_width(ink)
     lab, _ = ndi.label(ink, structure=_EIGHT)
     area = np.bincount(lab.ravel())
-    ink = (area >= speck_area(area[1:], s))[lab] & ink            # пылинки
-    angle = 0.0
+    s = text_stroke_width(ink, lab, area)
+    keep = (area >= speck_area(area[1:], s)) & ~solid_components(lab, ink, s)
+    horiz = horizontal_text(lab, len(area) - 1)
+    if area[horiz].sum() < 0.5 * area[1:].sum():                 # строки рядом с тодо бичиг (афиша, вывеска);
+        keep &= ~horiz                                            # а страницу, где их большинство, не трогаем:
+                                                                  # из обрывков русской страницы модель склеит мусор
+    ink = keep[lab] & ink                                         # пылинки и сплошные пятна
+    angle = 0.0                                                   # на сколько повернули на самом деле
     if deskew:
-        angle = float(estimate_skew(ink))
-        if abs(angle) >= 0.1:
+        estimate = float(estimate_skew(ink))
+        if abs(estimate) >= 0.1:
+            angle = estimate
             ink = np.asarray(Image.fromarray(ink.astype(np.uint8) * 255).rotate(angle, Image.NEAREST, expand=True)) > 127
             gray = np.asarray(Image.fromarray(gray).rotate(angle, Image.BICUBIC, expand=True, fillcolor=255))
     lab, _ = ndi.label(ink, structure=_EIGHT)
