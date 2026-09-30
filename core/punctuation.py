@@ -107,6 +107,8 @@ def apply_punctuation(todo_text: str, mode: str = DEFAULT_PUNCT) -> str:
     if not todo_text:
         return todo_text
     if mode == PUNCT_ALL:
-        return add_punctuation(todo_text)
+        # тире в начале реплики приходит с пробелом перед собой: « ︱ сән»
+        lines = [line.strip(" ") for line in todo_text.split("\n")]
+        return add_punctuation("\n".join(lines))
     text = strip_marks(todo_text)
     return _frame(text) if mode == PUNCT_FRAME else text

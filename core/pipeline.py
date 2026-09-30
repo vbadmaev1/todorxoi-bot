@@ -192,7 +192,7 @@ def _to_translit(text: str, script: str, res: Result, fix_letters: bool = False)
         return out
     raise PipelineError(
         "Не удалось распознать текст. Пришлите калмыцкую кириллицу, "
-        "транслитерацию на латинице или тодо бичиг."
+        "транслитерацию на латинице или тодо бичик."
     )
 
 
@@ -252,7 +252,7 @@ def process(
     if script == SCRIPT_UNKNOWN:
         raise PipelineError(
             "Не удалось распознать текст. Пришлите калмыцкую кириллицу, "
-            "транслитерацию на латинице или тодо бичиг."
+            "транслитерацию на латинице или тодо бичик."
         )
 
     res = Result(target=target, source_text=text, source_script=script)
@@ -285,7 +285,7 @@ def process(
     elif target == TARGET_TODO:
         if script == SCRIPT_TODO:
             raise PipelineError(
-                "Этот текст уже записан тодо бичиг. Если нужна картинка — "
+                "Этот текст уже записан тодо бичик. Если нужна картинка — "
                 "используйте /image."
             )
         res.translit = _to_translit(text, script, res, fix_letters)
@@ -307,7 +307,7 @@ def process(
             # сюда попадаем только при STRICT_SHAPING=1
             raise PipelineError(
                 "Рендер картинок отключён: окружение не умеет соединять "
-                "буквы тодо бичиг (STRICT_SHAPING=1). Подробности — в логах."
+                "буквы тодо бичик (STRICT_SHAPING=1). Подробности — в логах."
             ) from exc
         # без движка раскладки картинку всё равно рисуем, но честно помечаем
         # результат, чтобы никто не принял несоединённые буквы за письмо
@@ -344,14 +344,20 @@ def process(
         res.steps_ms["знаки"] = (time.perf_counter() - t0) * 1000
 
         t0 = time.perf_counter()
-        res.pages, meta = render_todo_pages(
-            render_text,
-            font_size=opts.font_size,
-            max_column_height=opts.max_column_height,
-            fg=opts.fg,
-            bg=opts.bg,
-            font_path=opts.font_path,
-        )
+        try:
+            res.pages, meta = render_todo_pages(
+                render_text,
+                font_size=opts.font_size,
+                max_column_height=opts.max_column_height,
+                fg=opts.fg,
+                bg=opts.bg,
+                font_path=opts.font_path,
+            )
+        except ValueError as exc:
+            # после снятия знаков препинания не осталось ни одной буквы
+            raise PipelineError(
+                "Нечего нарисовать: в тексте нет слов, одни знаки препинания."
+            ) from exc
         res.transparent = meta["transparent"]
         res.color_fallback = meta["color_fallback"]
         res.pages_dropped = meta["truncated"]

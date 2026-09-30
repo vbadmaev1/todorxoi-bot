@@ -40,6 +40,7 @@ uharfbuzz и freetype-py, — от ноутбука до докера на хо�
 """
 
 import os
+import unicodedata
 from functools import lru_cache
 
 from PIL import Image, ImageChops
@@ -90,6 +91,46 @@ def _load(font_path: str, size: int):
     return font, ft
 
 
+@lru_cache(maxsize=16)
+def _charset(font_path: str) -> frozenset:
+    """Какие символы вообще есть в шрифте."""
+    return frozenset(code for code, _gid in freetype.Face(font_path).get_chars())
+
+
+# Чего нет в шрифте — похожим знаком, который обычно есть. Замена берётся,
+# только если сама она в шрифте нашлась.
+_SUBSTITUTES = {
+    "…": "᠁",
+    "‐": "-", "‑": "-", "‒": "-", "−": "-",
+    "—": "︱", "–": "︱", "―": "︱",
+    "„": "«", "︽": "«", "︾": "»",
+    "\u00a0": " ", "\u202f": " ",
+}
+
+
+def fit_to_font(text: str, font_path: str) -> str:
+    """Убирает из строки символы, которых в шрифте нет: иначе они выходят
+    на картинке пустыми квадратиками (эмодзи, €, ×, … в монгольском
+    шрифте). Сначала пробуем похожий знак, не вышло — выбрасываем.
+    Невидимые управляющие символы (ZWJ, FVS) не трогаем: они влияют на
+    формы букв, а не рисуются сами."""
+    if not HAS_HARFBUZZ or not font_path:
+        return text
+    have = _charset(font_path)
+    out = []
+    for ch in text:
+        if ch in " \n" or ord(ch) in have or unicodedata.category(ch) == "Cf":
+            out.append(ch)
+            continue
+        sub = _SUBSTITUTES.get(ch)
+        if sub and all(c == " " or ord(c) in have for c in sub):
+            out.append(sub)
+        elif not out or out[-1] != " ":
+            # вместо выброшенного — пробел: «5€/кг» не должно слипнуться
+            out.append(" ")
+    return "".join(out)
+
+
 @lru_cache(maxsize=4096)
 def _glyph_bitmap(font_path: str, size: int, gid: int):
     """Растеризованный глиф: (маска 'L', left, top). Кэш нужен всерьёз —
@@ -122,6 +163,10 @@ def shape(text: str, font_path: str, size: int) -> ShapedRun:
     if not HAS_HARFBUZZ:  # pragma: no cover
         raise RuntimeError(f"uharfbuzz/freetype-py не установлены: {IMPORT_ERROR}")
 
+    if not text:
+        # HarfBuzz на пустой строке отдаёт None вместо списков глифов
+        return ShapedRun([], 0, 0, 0, 0, 0)
+
     font, _ = _load(font_path, size)
     buf = hb.Buffer()
     buf.add_str(text)
@@ -134,7 +179,7 @@ def shape(text: str, font_path: str, size: int) -> ShapedRun:
     ink_x0 = ink_y0 = 10**9
     ink_x1 = ink_y1 = -(10**9)
 
-    for info, pos in zip(buf.glyph_infos, buf.glyph_positions):
+    for info, pos in zip(buf.glyph_infos or [], buf.glyph_positions or []):
         bitmap, left, top = _glyph_bitmap(font_path, size, info.codepoint)
         x = round((pen_x + pos.x_offset) / 64) + left
         # ось Y у FreeType вверх, у картинки вниз — отсюда минус

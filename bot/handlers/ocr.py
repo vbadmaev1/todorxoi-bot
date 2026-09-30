@@ -31,7 +31,7 @@ from core import ocr as core_ocr
 from .. import formatting, keyboards, texts
 from ..config import Config
 from ..storage import Storage
-from .settings import load_punctuation
+from .settings import load_punctuation, load_show_time
 from .translate import _PHOTO_MAX_RATIO, _send_patiently
 
 log = logging.getLogger(__name__)
@@ -141,11 +141,12 @@ async def read_image(
         **base,
     )
     markup = keyboards.result_keyboard(request_id, TARGET_OCR)
-    await _answer(message, res, markup)
+    show_time = await load_show_time(storage, user.id) if user else True
+    await _answer(message, res, markup, show_time)
 
 
-async def _answer(message: Message, res, markup) -> None:
-    parts = formatting.render_ocr(res)
+async def _answer(message: Message, res, markup, show_time: bool = True) -> None:
+    parts = formatting.render_ocr(res, show_time)
     if res.overlay:
         photo = BufferedInputFile(res.overlay, filename="columns.jpg")
         w, h = res.overlay_size

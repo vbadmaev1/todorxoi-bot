@@ -31,13 +31,17 @@ async def cmd_stats(message: Message, storage: Storage, config: Config) -> None:
     total_votes = s["up"] + s["down"]
     share = f"{s['up'] / total_votes * 100:.0f}%" if total_votes else "—"
     await message.answer(
-        "<b>Статистика</b>\n\n"
-        f"Запросов: {s['requests']} (ошибок: {s['errors']})\n"
-        f"По режимам: {by_target}\n"
-        f"Уникальных пользователей: {s['users']}\n"
-        f"Среднее время: {fmt_ms(s['avg_ms'])}\n\n"
-        f"👍 {s['up']} · 👎 {s['down']} · доля 👍: {share}\n"
-        f"Присланных исправлений: {s['corrections']}"
+        texts.ADMIN_STATS.format(
+            requests=s["requests"],
+            errors=s["errors"],
+            by_target=by_target,
+            users=s["users"],
+            avg=fmt_ms(s["avg_ms"]),
+            up=s["up"],
+            down=s["down"],
+            share=share,
+            corrections=s["corrections"],
+        )
     )
 
 
@@ -55,6 +59,6 @@ async def cmd_export(
     await message.answer_document(
         BufferedInputFile(data, filename=name),
         caption=(
-            "Только исправления" if only_corrections else "Весь собранный фидбэк"
+            texts.ADMIN_EXPORT_CORRECTIONS if only_corrections else texts.ADMIN_EXPORT_ALL
         ),
     )

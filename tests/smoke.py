@@ -42,6 +42,7 @@ from aiogram.types import (  # noqa: E402
     User,
 )
 
+from bot import formatting  # noqa: E402
 from bot.config import Config  # noqa: E402
 from bot.handlers import build_router  # noqa: E402
 from bot.storage import Storage  # noqa: E402
@@ -206,7 +207,7 @@ async def main():
     print("\n1. Команды и меню")
     await dp.feed_update(bot, msg("/start"))
     _, m = session.last("SendMessage")
-    check(m and "Тодо Бичиг бот" in m.text, "/start отвечает приветствием")
+    check(m and "Тодо Бичик бот" in m.text, "/start отвечает приветствием")
 
     await dp.feed_update(bot, msg("/help"))
     _, m = session.last("SendMessage")
@@ -215,6 +216,12 @@ async def main():
     await dp.feed_update(bot, msg("/mode"))
     _, m = session.last("SendMessage")
     check("Транслитерация" in m.text, "/mode показывает режим по умолчанию")
+
+    # у кого клавиатура не обновилась, кнопка присылает старую подпись
+    await dp.feed_update(bot, msg("ᡐ Тодо бичиг"))
+    _, m = session.last("SendMessage")
+    check("Тодо бичик" in m.text, "старая кнопка «Тодо бичиг» включает режим todo")
+    await dp.feed_update(bot, msg("/translit"))
 
     print("\n2. Транслитерация (п.1)")
     await dp.feed_update(bot, msg("Хальмг улс"))
@@ -226,7 +233,7 @@ async def main():
     print("\n3. Тодо бичиг (п.2)")
     await dp.feed_update(bot, msg("/todo хальмг улс"))
     _, m = session.last("SendMessage")
-    check("Тодо бичиг" in m.text, "команда с текстом сразу обработана")
+    check("Тодо бичик" in m.text, "команда с текстом сразу обработана")
     check(any("᠀" <= ch <= "᢯" for ch in m.text), "в ответе есть тодо бичиг")
     buttons = [b.text for row in m.reply_markup.inline_keyboard for b in row]
     check("👍" in buttons and "👎" in buttons, "есть кнопки 👍/👎")
@@ -567,6 +574,26 @@ async def main():
     check(saved.get("fix_letters") == "off", "и выключается обратно")
     await dp.feed_update(bot, cb("set:reset:-"))
 
+    print("\n4c'. Время работы под ответом")
+    await dp.feed_update(bot, msg("/settings"))
+    _, m = session.last("SendMessage")
+    buttons = [b.text for row in m.reply_markup.inline_keyboard for b in row]
+    check(any("Время работы: показывать" in b for b in buttons),
+          "по умолчанию время показывается, кнопка есть в /settings")
+    await dp.feed_update(bot, cb("set:toggle:show_time"))
+    saved = await storage.get_settings(USER.id)
+    check(saved.get("show_time") == "off", "время работы выключается в /settings")
+    await dp.feed_update(bot, msg("/todo хальмг улс"))
+    _, m = session.last("SendMessage")
+    check("⏱" not in m.text, "выключено: в ответе нет времени")
+    await dp.feed_update(bot, msg("/image хальмг улс"))
+    _, m = session.last()
+    check("⏱" not in (m.caption or ""), "выключено: и под картинкой нет")
+    await dp.feed_update(bot, cb("set:reset:-"))
+    await dp.feed_update(bot, msg("/translit хальмг улс"))
+    _, m = session.last("SendMessage")
+    check("⏱" in m.text, "после сброса время снова показывается")
+
     print("\n4d. Режим /fix — исправление калмыцкого текста")
     for wrong, right in [
         ("дугарна бяядл", "дуһарна бәәдл"),       # основа дуһар + окончание -на
@@ -680,6 +707,39 @@ async def main():
     _, m = session.last("SendMessage")
     check("Не знаю такой команды" in m.text, "неизвестная команда не уходит в перевод")
 
+    # тире в начале реплики: со всеми знаками строка начиналась с пробела,
+    # и перенос по словам отдавал HarfBuzz пустую строку — картинка падала
+    await dp.feed_update(bot, cb("set:set:punctuation:all"))
+    await dp.feed_update(bot, msg("/image — Мендвт!\n— Сән, сән."))
+    name, m = session.last()
+    check(name in ("SendPhoto", "SendDocument"), "тире в начале реплики: картинка рисуется")
+    from core import shaper
+    from core.todo_image import DEFAULT_TODO_FONT
+    check(shaper.fit_to_font("ᠠ🙂 € … ᠠ", DEFAULT_TODO_FONT) == "ᠠ   ᠁ ᠠ",
+          "символов, которых нет в шрифте, на картинке нет: не квадратики")
+    await dp.feed_update(bot, cb("set:reset:-"))
+    # по умолчанию знаки снимаются — от «᠀᠀᠀» не остаётся ничего
+    await dp.feed_update(bot, msg("/image ᠀᠀᠀"))
+    _, m = session.last("SendMessage")
+    check("Нечего нарисовать" in m.text, "одни знаки препинания — понятный отказ")
+
+    # что бы ни упало после обработки (например, отправка в Telegram),
+    # человек получает ответ, а не тишину
+    real_render = formatting.render_result
+
+    def broken_render(*args, **kwargs):
+        raise RuntimeError("сбой для проверки")
+
+    formatting.render_result = broken_render
+    try:
+        await dp.feed_update(bot, msg("/translit хальмг улс"))
+    except RuntimeError:
+        pass
+    finally:
+        formatting.render_result = real_render
+    _, m = session.last("SendMessage")
+    check("Что-то пошло не так" in m.text, "сбой вне обработки текста — бот всё равно отвечает")
+
     print("\n12. Фото → текст")
     await _check_ocr(dp, bot, session, storage)
 
@@ -718,7 +778,7 @@ async def _check_ocr(dp, bot, session, storage):
     body = getattr(m, "caption", None) or getattr(m, "text", None) or ""
     check("GetFile" in sent, "бот скачал присланное фото")
     check("SendPhoto" in sent or "SendDocument" in sent, "пришла картинка с рамками столбцов")
-    check("Транслитерация" in body and "Тодо бичиг" in body, "в ответе транслитерация и тодо бичиг")
+    check("Транслитерация" in body and "Тодо бичик" in body, "в ответе транслитерация и тодо бичиг")
     buttons = [b.text for row in m.reply_markup.inline_keyboard for b in row] if m.reply_markup else []
     check("👍" in buttons, "под ответом есть 👍/👎")
 

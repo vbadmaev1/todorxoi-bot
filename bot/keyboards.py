@@ -20,6 +20,7 @@ from . import texts
 #   set:pick:<поле>         — открыть палитру/список размеров
 #   set:set:<поле>:<знач>   — выбрать значение
 #   set:toggle:fix_letters  — исправлять текст без калмыцких букв: вкл/выкл
+#   set:toggle:show_time    — время работы под ответом: вкл/выкл
 #   set:set:punctuation:<режим> — знаки препинания: off | frame | all
 #   set:back:-              — вернуться в меню настроек
 #   set:reset:-             — сбросить всё на умолчания
@@ -28,21 +29,10 @@ CB_FEEDBACK = "fb"
 CB_CONVERT = "conv"
 CB_SETTINGS = "set"
 
-SIZE_LABELS = {"small": "мелкий", "medium": "средний", "large": "крупный"}
-FONT_LABELS = {
-    "universal": "классический",
-    "clear": "Clear Script",
-    "biyir": "Biyir",
-    "demberil": "Demberil",
-    "garcaq": "Garcaq",
-    "zakaa": "Zakaa",
-}
-# знаки препинания тодо бичиг, см. core/punctuation.py
-PUNCT_LABELS = {
-    "off": "не ставить",
-    "frame": "только начало и конец",
-    "all": "все",
-}
+# подписи живут в texts.py; здесь — для старых импортов keyboards.*_LABELS
+SIZE_LABELS = texts.SIZE_LABELS
+FONT_LABELS = texts.FONT_LABELS
+PUNCT_LABELS = texts.PUNCT_LABELS
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -53,7 +43,7 @@ def main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=texts.BTN_HELP)],
         ],
         resize_keyboard=True,
-        input_field_placeholder="Пришлите калмыцкий текст…",
+        input_field_placeholder=texts.MENU_PLACEHOLDER,
     )
 
 
@@ -66,24 +56,24 @@ def result_keyboard(request_id: int, target: str, with_feedback: bool = True):
         # исправленный текст — сразу дальше, в любой из трёх записей
         convert.append(
             InlineKeyboardButton(
-                text="→ Транслитерация", callback_data=f"{CB_CONVERT}:translit:{request_id}"
+                text=texts.BTN_TO_TRANSLIT, callback_data=f"{CB_CONVERT}:translit:{request_id}"
             )
         )
         convert.append(
             InlineKeyboardButton(
-                text="→ Тодо бичиг", callback_data=f"{CB_CONVERT}:todo:{request_id}"
+                text=texts.BTN_TO_TODO, callback_data=f"{CB_CONVERT}:todo:{request_id}"
             )
         )
     if target == "translit":
         convert.append(
             InlineKeyboardButton(
-                text="→ Тодо бичиг", callback_data=f"{CB_CONVERT}:todo:{request_id}"
+                text=texts.BTN_TO_TODO, callback_data=f"{CB_CONVERT}:todo:{request_id}"
             )
         )
     if target in ("translit", "todo", "fix"):
         convert.append(
             InlineKeyboardButton(
-                text="→ Картинка", callback_data=f"{CB_CONVERT}:image:{request_id}"
+                text=texts.BTN_TO_IMAGE, callback_data=f"{CB_CONVERT}:image:{request_id}"
             )
         )
     if convert:
@@ -107,50 +97,66 @@ def result_keyboard(request_id: int, target: str, with_feedback: bool = True):
 
 
 def settings_menu(
-    opts, fix_letters: bool = False, punctuation: str = "off"
+    opts, fix_letters: bool = False, punctuation: str = "off", show_time: bool = True
 ) -> InlineKeyboardMarkup:
     """Главный экран /settings: что менять."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"🖋 Текст: {color_label(opts.fg)}",
+                    text=texts.SET_BTN_FG.format(value=color_label(opts.fg)),
                     callback_data=f"{CB_SETTINGS}:pick:fg",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=f"🎨 Фон: {color_label(opts.bg)}",
+                    text=texts.SET_BTN_BG.format(value=color_label(opts.bg)),
                     callback_data=f"{CB_SETTINGS}:pick:bg",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=f"🔠 Размер: {SIZE_LABELS.get(opts.size, opts.size)}",
+                    text=texts.SET_BTN_SIZE.format(
+                        value=SIZE_LABELS.get(opts.size, opts.size)
+                    ),
                     callback_data=f"{CB_SETTINGS}:pick:size",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=f"✒️ Шрифт: {FONT_LABELS.get(opts.font, opts.font)}",
+                    text=texts.SET_BTN_FONT.format(
+                        value=FONT_LABELS.get(opts.font, opts.font)
+                    ),
                     callback_data=f"{CB_SETTINGS}:pick:font",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=f"🔣 Знаки: {PUNCT_LABELS.get(punctuation, punctuation)}",
+                    text=texts.SET_BTN_PUNCT.format(
+                        value=PUNCT_LABELS.get(punctuation, punctuation)
+                    ),
                     callback_data=f"{CB_SETTINGS}:pick:punctuation",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=f"🔡 Без калмыцких букв: {'исправлять' if fix_letters else 'не трогать'}",
+                    text=texts.SET_BTN_FIX.format(
+                        value=texts.FIX_LETTERS_ON if fix_letters else texts.FIX_LETTERS_OFF
+                    ),
                     callback_data=f"{CB_SETTINGS}:toggle:fix_letters",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="↩︎ Сбросить всё", callback_data=f"{CB_SETTINGS}:reset:-"
+                    text=texts.SET_BTN_TIME.format(
+                        value=texts.SHOW_TIME_ON if show_time else texts.SHOW_TIME_OFF
+                    ),
+                    callback_data=f"{CB_SETTINGS}:toggle:show_time",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=texts.SET_BTN_RESET, callback_data=f"{CB_SETTINGS}:reset:-"
                 )
             ],
         ]
@@ -173,7 +179,7 @@ def color_picker(field: str, current: str) -> InlineKeyboardMarkup:
     ]
     rows = _grid(buttons, per_row=2)
     rows.append(
-        [InlineKeyboardButton(text="‹ Назад", callback_data=f"{CB_SETTINGS}:back:-")]
+        [InlineKeyboardButton(text=texts.BTN_BACK, callback_data=f"{CB_SETTINGS}:back:-")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -189,7 +195,7 @@ def size_picker(current: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             buttons,
-            [InlineKeyboardButton(text="‹ Назад", callback_data=f"{CB_SETTINGS}:back:-")],
+            [InlineKeyboardButton(text=texts.BTN_BACK, callback_data=f"{CB_SETTINGS}:back:-")],
         ]
     )
 
@@ -204,7 +210,7 @@ def font_picker(current: str) -> InlineKeyboardMarkup:
     ]
     rows = _grid(buttons, per_row=2)
     rows.append(
-        [InlineKeyboardButton(text="‹ Назад", callback_data=f"{CB_SETTINGS}:back:-")]
+        [InlineKeyboardButton(text=texts.BTN_BACK, callback_data=f"{CB_SETTINGS}:back:-")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -221,14 +227,14 @@ def punct_picker(current: str) -> InlineKeyboardMarkup:
         for key, label in PUNCT_LABELS.items()
     ]
     rows.append(
-        [InlineKeyboardButton(text="‹ Назад", callback_data=f"{CB_SETTINGS}:back:-")]
+        [InlineKeyboardButton(text=texts.BTN_BACK, callback_data=f"{CB_SETTINGS}:back:-")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def rated_keyboard(rating: str) -> InlineKeyboardMarkup:
     """Клавиатура после оценки — кнопки убираем, оставляем отметку."""
-    mark = "👍 оценено" if rating == "up" else "👎 оценено"
+    mark = texts.RATED_UP if rating == "up" else texts.RATED_DOWN
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=mark, callback_data="noop")]]
     )
