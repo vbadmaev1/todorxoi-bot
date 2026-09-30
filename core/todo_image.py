@@ -267,8 +267,11 @@ def _wrap_line(line, font, font_path, font_size, max_column_height, draw):
     """Разбивает одну строку тодо-бичиг текста на под-строки так, чтобы
     каждая под-строка при горизонтальном рендере не превышала по ширине
     max_column_height (это и есть будущая высота столбца после поворота).
-    Перенос — по обычному пробелу; \\u202f внутри "слова" не трогаем."""
-    words = line.split(" ")
+    Перенос — по обычному пробелу; \\u202f внутри "слова" не трогаем.
+    Пробелы по краям и двойные пробелы пустых «слов» не дают: строка
+    « ︱ сән» (тире в начале реплики) иначе начиналась бы с пустого
+    кусочка, а пустую строку HarfBuzz не раскладывает."""
+    words = [word for word in line.split(" ") if word]
     sublines = []
     current = ""
     for word in words:
@@ -316,7 +319,7 @@ def _build_columns(
 
     columns = []
     for line in lines:
-        line = line.strip("\n")
+        line = shaper.fit_to_font(line.strip("\n"), font_path)
         if not line.strip():
             continue
         sublines = _wrap_line(

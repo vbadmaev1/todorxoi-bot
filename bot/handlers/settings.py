@@ -5,7 +5,7 @@
 по умолчанию выключено — правильно набранный текст не должен меняться
 без спроса), и знаки препинания тодо бичиг (core/punctuation.py; по
 умолчанию не ставятся — ни в тексте, ни на картинке, ни в распознанном
-фото).
+фото) и время работы под ответом (по умолчанию показывается).
 
 Настройки у каждого пользователя свои и лежат в таблице user_settings,
 то есть переживают перезапуск бота (в отличие от режима, который живёт в
@@ -69,7 +69,12 @@ async def load_punctuation(storage: Storage, user_id: int) -> str:
     return saved if saved in PUNCT_MODES else DEFAULT_PUNCT
 
 
-def _describe(opts: ImageOptions, fix_letters: bool, punct: str) -> str:
+async def load_show_time(storage: Storage, user_id: int) -> bool:
+    """Показывать ли время работы под ответом. По умолчанию — да."""
+    return (await storage.get_settings(user_id)).get("show_time") != "off"
+
+
+def _describe(opts: ImageOptions, fix_letters: bool, punct: str, show_time: bool) -> str:
     return texts.SETTINGS.format(
         fg=color_label(opts.fg),
         bg=color_label(opts.bg),
@@ -77,6 +82,7 @@ def _describe(opts: ImageOptions, fix_letters: bool, punct: str) -> str:
         font=keyboards.FONT_LABELS.get(opts.font, opts.font),
         fix_letters=texts.FIX_LETTERS_ON if fix_letters else texts.FIX_LETTERS_OFF,
         punctuation=keyboards.PUNCT_LABELS.get(punct, punct),
+        show_time=texts.SHOW_TIME_ON if show_time else texts.SHOW_TIME_OFF,
     )
 
 
@@ -86,17 +92,24 @@ async def cmd_settings(message: Message, storage: Storage) -> None:
     opts = await load_options(storage, user_id)
     fix = await load_fix_letters(storage, user_id)
     punct = await load_punctuation(storage, user_id)
+    show_time = await load_show_time(storage, user_id)
     await message.answer(
-        _describe(opts, fix, punct),
-        reply_markup=keyboards.settings_menu(opts, fix, punct),
+        _describe(opts, fix, punct, show_time),
+        reply_markup=keyboards.settings_menu(opts, fix, punct, show_time),
     )
 
 
 async def _refresh(
-    callback: CallbackQuery, opts: ImageOptions, fix: bool, punct: str, markup
+    callback: CallbackQuery, opts: ImageOptions, fix: bool, punct: str,
+    show_time: bool, markup=None,
 ) -> None:
+    """Перерисовать экран настроек. Без markup — главное меню."""
+    if markup is None:
+        markup = keyboards.settings_menu(opts, fix, punct, show_time)
     try:
-        await callback.message.edit_text(_describe(opts, fix, punct), reply_markup=markup)
+        await callback.message.edit_text(
+            _describe(opts, fix, punct, show_time), reply_markup=markup
+        )
     except TelegramBadRequest:
         # «message is not modified» — значит показывать уже нечего
         pass
@@ -110,6 +123,7 @@ async def on_settings(callback: CallbackQuery, storage: Storage) -> None:
     opts = await load_options(storage, user_id)
     fix = await load_fix_letters(storage, user_id)
     punct = await load_punctuation(storage, user_id)
+    show_time = await load_show_time(storage, user_id)
 
     if action == "pick":
         field = parts[2]
@@ -122,14 +136,23 @@ async def on_settings(callback: CallbackQuery, storage: Storage) -> None:
         else:
             markup = keyboards.color_picker(field, getattr(opts, field))
         await callback.answer()
-        await _refresh(callback, opts, fix, punct, markup)
+        await _refresh(callback, opts, fix, punct, show_time, markup)
         return
 
     if action == "toggle" and parts[2:3] == ["fix_letters"]:
         fix = not fix
         await storage.set_setting(user_id, "fix_letters", "on" if fix else "off")
-        await callback.answer("Буду исправлять" if fix else "Не буду исправлять")
-        await _refresh(callback, opts, fix, punct, keyboards.settings_menu(opts, fix, punct))
+        await callback.answer(texts.SETTINGS_FIX_ON if fix else texts.SETTINGS_FIX_OFF)
+        await _refresh(callback, opts, fix, punct, show_time)
+        return
+
+    if action == "toggle" and parts[2:3] == ["show_time"]:
+        show_time = not show_time
+        await storage.set_setting(user_id, "show_time", "on" if show_time else "off")
+        await callback.answer(
+            texts.SETTINGS_TIME_ON if show_time else texts.SETTINGS_TIME_OFF
+        )
+        await _refresh(callback, opts, fix, punct, show_time)
         return
 
     if action == "set":
@@ -148,20 +171,19 @@ async def on_settings(callback: CallbackQuery, storage: Storage) -> None:
         if field in ("fg", "bg") and opts.fg == opts.bg:
             await callback.answer(texts.SETTINGS_SAME_COLOR, show_alert=True)
         else:
-            await callback.answer("Сохранил")
-        await _refresh(callback, opts, fix, punct, keyboards.settings_menu(opts, fix, punct))
+            await callback.answer(texts.SETTINGS_SAVED)
+        await _refresh(callback, opts, fix, punct, show_time)
         return
 
     if action == "back":
         await callback.answer()
-        await _refresh(callback, opts, fix, punct, keyboards.settings_menu(opts, fix, punct))
+        await _refresh(callback, opts, fix, punct, show_time)
         return
 
     if action == "reset":
         await storage.reset_settings(user_id)
-        opts = ImageOptions()
-        await callback.answer("Вернул настройки по умолчанию")
-        await _refresh(callback, opts, False, DEFAULT_PUNCT, keyboards.settings_menu(opts))
+        await callback.answer(texts.SETTINGS_RESET)
+        await _refresh(callback, ImageOptions(), False, DEFAULT_PUNCT, True)
         return
 
     await callback.answer()

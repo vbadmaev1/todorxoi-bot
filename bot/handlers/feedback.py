@@ -109,6 +109,4 @@ async def save_correction(
 
 @router.message(Feedback.waiting_correction)
 async def correction_must_be_text(message: Message) -> None:
-    await message.answer(
-        "Жду правильный вариант текстом. Если передумали — /cancel."
-    )
+    await message.answer(texts.FEEDBACK_NEED_TEXT)

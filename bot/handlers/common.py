@@ -131,3 +131,10 @@ async def btn_image(
     message: Message, state: FSMContext, storage: Storage, config: Config
 ) -> None:
     await _switch(message, state, "image", None, storage, config)
+
+
+@router.message(F.text.in_(texts.LEGACY_BUTTONS))
+async def btn_legacy(
+    message: Message, state: FSMContext, storage: Storage, config: Config
+) -> None:
+    await _switch(message, state, texts.LEGACY_BUTTONS[message.text], None, storage, config)

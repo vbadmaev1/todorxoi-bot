@@ -33,35 +33,36 @@ def _header(res: Result) -> str:
     return f"{icon} <b>{title}</b>"
 
 
-def render_result(res: Result) -> str:
+def render_result(res: Result, show_time: bool = True) -> str:
     """Текст ответа для режимов «транслитерация» и «тодо бичиг»."""
     blocks = [_header(res)]
 
     if res.target == "fix":
-        return _render_fix(res)
+        return _render_fix(res, show_time)
     if res.target == "translit" and res.cyrillic:
         # тодо бичиг или латиница -> кириллица; транслитерацию латиницы
         # повторять незачем
         if res.source_script != "translit":
-            blocks.append(f"Транслитерация:\n<code>{escape(res.translit or '')}</code>")
-        blocks.append(f"Кириллица:\n<code>{escape(res.cyrillic)}</code>")
+            blocks.append(f"{texts.LABEL_TRANSLIT}\n<code>{escape(res.translit or '')}</code>")
+        blocks.append(f"{texts.LABEL_CYRILLIC}\n<code>{escape(res.cyrillic)}</code>")
     elif res.target == "translit":
         blocks.append(f"<code>{escape(res.translit or '')}</code>")
     else:
         if res.translit:
             blocks.append(
-                f"Транслитерация:\n<code>{escape(res.translit)}</code>"
+                f"{texts.LABEL_TRANSLIT}\n<code>{escape(res.translit)}</code>"
             )
-        blocks.append(f"Тодо бичиг:\n<code>{escape(res.todo or '')}</code>")
+        blocks.append(f"{texts.LABEL_TODO}\n<code>{escape(res.todo or '')}</code>")
 
     note = letters_note(res)
     if note:
         blocks.append(note)
-    blocks.append(timing_line(res))
+    if show_time:
+        blocks.append(timing_line(res))
     return "\n\n".join(blocks)
 
 
-def _render_fix(res: Result) -> str:
+def _render_fix(res: Result, show_time: bool = True) -> str:
     """Режим /fix: исправленный текст целиком (его удобно скопировать) и
     что именно поменялось."""
     blocks = [_header(res)]
@@ -70,7 +71,8 @@ def _render_fix(res: Result) -> str:
         blocks.append(letters_note(res))
     else:
         blocks.append(texts.FIX_NOTHING)
-    blocks.append(timing_line(res))
+    if show_time:
+        blocks.append(timing_line(res))
     return "\n\n".join(blocks)
 
 
@@ -94,26 +96,30 @@ def letters_note(res: Result) -> str:
     return ""
 
 
-def render_caption(res: Result, page: int = 1, pages: int = 1) -> str:
+def render_caption(
+    res: Result, page: int = 1, pages: int = 1, show_time: bool = True
+) -> str:
     """Подпись под картинкой — то же самое, но с оглядкой на лимит в 1024."""
     text = (
-        render_result(res)
+        render_result(res, show_time)
         if res.target != "image"
-        else _image_caption(res, page, pages)
+        else _image_caption(res, page, pages, show_time)
     )
     if len(text) <= CAPTION_LIMIT:
         return text
     return text[: CAPTION_LIMIT - 1] + "…"
 
 
-def _image_caption(res: Result, page: int = 1, pages: int = 1) -> str:
+def _image_caption(
+    res: Result, page: int = 1, pages: int = 1, show_time: bool = True
+) -> str:
     # под картинкой транслитерацию не дублируем: кому она нужна, тот
     # спросит её отдельно командой /translit
     header = _header(res)
     if pages > 1:
         # Столбцы читаются слева направо, листы — по порядку. Номер нужен
         # именно в подписи: в чате сообщения легко перепутать местами.
-        header += f" · картинка {page} из {pages}"
+        header += texts.IMAGE_PAGE.format(page=page, pages=pages)
     blocks = [header]
 
     # служебное говорим один раз, под первым листом: под каждым — шум
@@ -130,26 +136,27 @@ def _image_caption(res: Result, page: int = 1, pages: int = 1) -> str:
         if note:
             blocks.append(note)
 
-    if page == pages:
+    if page == pages and show_time:
         blocks.append(timing_line(res))
     return "\n\n".join(blocks)
 
 
-def render_ocr(res) -> list:
+def render_ocr(res, show_time: bool = True) -> list:
     """Ответ на фото: кириллица, транслитерация и тодо бичиг, по строке на столбец.
 
     Полная страница — это около 2000 символов на обе записи, почти всегда
     одно сообщение. Если не влезает в лимит Telegram, режем по столбцам:
     каждая часть — законченный блок <code>, чтобы копировать было удобно.
     Возвращает список текстов сообщений."""
-    blocks = [f"📷 <b>Текст с фото</b> · столбцов: {len(res.columns)}"]
+    blocks = [texts.OCR_TITLE.format(n=len(res.columns))]
     if res.cyrillic_columns:
-        blocks += _code_blocks("Кириллица:", res.cyrillic_columns)
-    blocks += _code_blocks("Транслитерация:", res.translit_columns)
-    blocks += _code_blocks("Тодо бичиг:", res.columns)
+        blocks += _code_blocks(texts.LABEL_CYRILLIC, res.cyrillic_columns)
+    blocks += _code_blocks(texts.LABEL_TRANSLIT, res.translit_columns)
+    blocks += _code_blocks(texts.LABEL_TODO, res.columns)
     if res.low_confidence:
         blocks.append(texts.OCR_LOW_CONFIDENCE)
-    blocks.append(f"⏱ {fmt_ms(res.elapsed_ms)}")
+    if show_time:
+        blocks.append(f"⏱ {fmt_ms(res.elapsed_ms)}")
     return _pack(blocks, MESSAGE_LIMIT)
 
 

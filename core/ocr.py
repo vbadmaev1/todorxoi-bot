@@ -456,12 +456,12 @@ def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNC
     if best is None:
         raise OcrError(
             "Не нашёл на картинке вертикального текста. Пришлите фото, где "
-            "столбцы тодо бичиг идут сверху вниз."
+            "столбцы тодо бичик идут сверху вниз."
         )
     todo, confidence, letters, dbg = best
     if letters < MIN_LETTERS:
         raise OcrError(
-            "Не разобрал на картинке тодо бичиг. Нужно фото, где столбцы идут "
+            "Не разобрал на картинке тодо бичик. Нужно фото, где столбцы идут "
             "сверху вниз, а буквы крупные и чёткие."
         )
 

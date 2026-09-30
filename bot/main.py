@@ -17,6 +17,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
+from . import texts
 from .config import Config
 from .handlers import build_router
 from .storage import Storage
@@ -24,15 +25,8 @@ from .storage import Storage
 log = logging.getLogger("todorxoi")
 
 COMMANDS = [
-    BotCommand(command="translit", description="Кириллица → транслитерация"),
-    BotCommand(command="todo", description="→ тодо бичиг"),
-    BotCommand(command="image", description="→ картинка"),
-    BotCommand(command="fix", description="Исправить: вернуть ә ө ү һ җ ң"),
-    BotCommand(command="ocr", description="Фото → текст"),
-    BotCommand(command="mode", description="Текущий режим"),
-    BotCommand(command="settings", description="Картинка и исправление букв"),
-    BotCommand(command="help", description="Как работает бот"),
-    BotCommand(command="cancel", description="Отменить ввод исправления"),
+    BotCommand(command=name, description=description)
+    for name, description in texts.COMMANDS.items()
 ]
 
 
