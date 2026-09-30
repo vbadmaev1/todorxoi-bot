@@ -97,6 +97,21 @@ async def cmd_image(
     await _switch(message, state, "image", command.args, storage, config)
 
 
+@router.message(Command("fix"))
+async def cmd_fix(
+    message: Message, command: CommandObject, state: FSMContext,
+    storage: Storage, config: Config,
+) -> None:
+    await _switch(message, state, "fix", command.args, storage, config)
+
+
+@router.message(F.text == texts.BTN_FIX)
+async def btn_fix(
+    message: Message, state: FSMContext, storage: Storage, config: Config
+) -> None:
+    await _switch(message, state, "fix", None, storage, config)
+
+
 @router.message(F.text == texts.BTN_TRANSLIT)
 async def btn_translit(
     message: Message, state: FSMContext, storage: Storage, config: Config

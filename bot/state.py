@@ -10,7 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 DEFAULT_MODE = "translit"
-MODES = ("translit", "todo", "image")
+MODES = ("translit", "todo", "image", "fix")
 
 
 class Feedback(StatesGroup):

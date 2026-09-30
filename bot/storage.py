@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS requests (
     user_id      INTEGER,
     username     TEXT,
     chat_id      INTEGER,
-    target       TEXT    NOT NULL,   -- translit | todo | image
+    target       TEXT    NOT NULL,   -- translit | todo | image | fix | ocr
     source_script TEXT,              -- cyrillic | translit | todo
     input_text   TEXT    NOT NULL,
     translit     TEXT,

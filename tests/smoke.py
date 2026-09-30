@@ -489,6 +489,40 @@ async def main():
     check(saved.get("fix_letters") == "off", "и выключается обратно")
     await dp.feed_update(bot, cb("set:reset:-"))
 
+    print("\n4d. Режим /fix — исправление калмыцкого текста")
+    for wrong, right in [
+        ("дугарна бяядл", "дуһарна бәәдл"),       # основа дуһар + окончание -на
+        ("Та гергтявт?", "Та гергтәвт?"),
+        ("Тер дугарна гиҗ келв.", "Тер дуһарна гиҗ келв."),  # явная проверка
+    ]:
+        got = fix_text(wrong, force=True).text
+        check(got == right, f"/fix: {wrong} -> {got}")
+
+    await dp.feed_update(bot, msg("/fix Сян бяянт, мана энкр бичкдуд"))
+    _, m = session.last("SendMessage")
+    check("Сән бәәнт, мана эңкр бичкдүд" in m.text and "бяянт → бәәнт" in m.text,
+          "/fix возвращает исправленный текст и список правок")
+    buttons = [b.callback_data for row in m.reply_markup.inline_keyboard for b in row]
+    check(any(b.startswith("conv:translit:") for b in buttons)
+          and any(b.startswith("conv:image:") for b in buttons),
+          "под исправленным текстом — кнопки перевода дальше")
+    fix_id = max_request_id(storage)
+
+    await dp.feed_update(bot, cb(f"conv:translit:{fix_id}"))
+    _, m = session.last("SendMessage")
+    row = await storage.get_request(max_request_id(storage))
+    check(row["target"] == "translit" and row["input_text"] == "Сән бәәнт, мана эңкр бичкдүд",
+          "«→ Транслитерация» переводит уже исправленный текст")
+
+    await dp.feed_update(bot, msg("/fix Хальмг Таңһч"))
+    _, m = session.last("SendMessage")
+    check("Ошибок не нашёл" in m.text, "/fix на правильном тексте: ошибок нет")
+
+    await dp.feed_update(bot, msg("/fix xalimaq"))
+    _, m = session.last("SendMessage")
+    check("кириллицей" in m.text, "/fix на латинице — понятный отказ")
+    await dp.feed_update(bot, msg("/translit"))
+
     print("\n5. Фидбэк: 👍")
     row = await storage.get_request(1)
     await dp.feed_update(bot, cb(f"fb:up:{row['id']}"))

@@ -5,11 +5,11 @@ build_letters_vocab.py — словарь с частотами для core/fix_
 Берёт предложения корпуса (todorxoi-inference/corpus_out) и словарь модели
 транслитерации, пишет model/letters_vocab.tsv.gz:
 
-    слово<TAB>частота<TAB>k|r
+    слово<TAB>частота<TAB>d|k|r
 
-k — калмыцкое слово, r — русское слово из калмыцких текстов (гражданск,
-доктор, Сталинград): его исправлять нельзя, хотя выглядит оно как
-калмыцкое без спецбукв.
+d — слово из проверенного словаря модели, k — калмыцкое слово из корпуса,
+r — русское слово из калмыцких текстов (гражданск, доктор, Сталинград): его
+исправлять нельзя, хотя выглядит оно как калмыцкое без спецбукв.
 
 Корпус распознан OCR и сам местами без спецбукв: «гиж» в нём 281 раз,
 «болж» 241, «кун», «менгн», латинская h («темдгтэhер»). Такие формы в
@@ -76,7 +76,8 @@ def read_dictionary(npz_path):
 
 
 def build_vocab(corpus_path, npz_path, exclude_books=()):
-    """-> (vocab: слово -> частота, protected: русские слова)."""
+    """-> (vocab: слово -> частота, protected: русские слова,
+    noise: отсеянные формы, trusted: слова проверенного словаря)."""
     kal, ru = read_corpus(corpus_path, exclude_books)
     trusted = read_dictionary(npz_path)
     vocab = Counter({w: n for w, n in kal.items() if w in trusted or not _NEVER.search(w)})
@@ -94,13 +95,13 @@ def build_vocab(corpus_path, npz_path, exclude_books=()):
                 break
     vocab = {w: n for w, n in vocab.items() if w not in noise}
     protected = {w for w in ru if w not in vocab}
-    return vocab, protected, noise
+    return vocab, protected, noise, trusted
 
 
-def write_vocab(path, vocab, protected):
+def write_vocab(path, vocab, protected, trusted):
     with gzip.open(path, "wt", encoding="utf-8") as fh:
         for w, n in sorted(vocab.items(), key=lambda x: (-x[1], x[0])):
-            fh.write(f"{w}\t{n}\tk\n")
+            fh.write(f"{w}\t{n}\t{'d' if w in trusted else 'k'}\n")
         for w in sorted(protected):
             fh.write(f"{w}\t0\tr\n")
 
@@ -113,8 +114,8 @@ def main():
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = ap.parse_args()
 
-    vocab, protected, noise = build_vocab(args.corpus, args.npz)
-    write_vocab(args.out, vocab, protected)
+    vocab, protected, noise, trusted = build_vocab(args.corpus, args.npz)
+    write_vocab(args.out, vocab, protected, trusted)
     print(f"слов {len(vocab)}, русских {len(protected)}, отсеяно как шум {len(noise)}")
     print(f"записан {args.out} ({args.out.stat().st_size // 1024} КБ)")
 
