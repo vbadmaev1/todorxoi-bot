@@ -52,12 +52,32 @@ def _softmax(x):
 
 def _gru_step(x, h, w_ih, w_hh, b_ih, b_hh, hid):
     """Один шаг GRU. Порядок ворот в весах torch: r, z, n."""
-    gi = w_ih @ x + b_ih
+    return _gru_gates(w_ih @ x + b_ih, h, w_hh, b_hh, hid)
+
+
+def _gru_gates(gi, h, w_hh, b_hh, hid):
+    """Шаг GRU по уже посчитанной входной части gi = W_ih·x + b_ih."""
     gh = w_hh @ h + b_hh
     r = _sigmoid(gi[:hid] + gh[:hid])
     z = _sigmoid(gi[hid:2 * hid] + gh[hid:2 * hid])
     n = np.tanh(gi[2 * hid:] + r * gh[2 * hid:])
     return (1.0 - z) * n + z * h
+
+
+def gru_pass(xs, w_ih, w_hh, b_ih, b_hh, hid, reverse=False):
+    """Один проход GRU по всей последовательности xs (S, in) -> (S, hid).
+
+    Входная часть W_ih·x от прошлых состояний не зависит, поэтому
+    считается одним умножением на всю строку; в цикле остаётся только
+    W_hh·h. На строке в 40 символов это втрое быстрее пошагового."""
+    gi_all = xs @ w_ih.T + b_ih
+    out = np.empty((len(xs), hid), dtype=np.float32)
+    h = np.zeros(hid, dtype=np.float32)
+    steps = range(len(xs) - 1, -1, -1) if reverse else range(len(xs))
+    for t in steps:
+        h = _gru_gates(gi_all[t], h, w_hh, b_hh, hid)
+        out[t] = h
+    return out
 
 
 class CharVocab:
@@ -119,6 +139,10 @@ class TranslitModel:
         self.dec_emb = w["decoder.emb.weight"]
         self.attn_w = w["decoder.attention.attn.weight"]
         self.attn_b = w["decoder.attention.attn.bias"]
+        # внимание: W·[h_dec ; enc_t] = W_h·h_dec + W_e·enc_t. Вторая часть
+        # от шага декодера не зависит — считается один раз на вход (_encode)
+        self.attn_wh = np.ascontiguousarray(self.attn_w[:, :self.hid])
+        self.attn_we = np.ascontiguousarray(self.attn_w[:, self.hid:])
         self.v_w = w["decoder.attention.v.weight"]          # (1, hid), без bias
         self.d_wih = w["decoder.gru.weight_ih"]
         self.d_whh = w["decoder.gru.weight_hh"]
@@ -135,35 +159,21 @@ class TranslitModel:
     def _encode(self, ids):
         hid = self.hid
         embs = self.enc_emb[ids]                       # (S, emb)
-
-        h = np.zeros(hid, dtype=np.float32)
-        fwd = np.empty((len(ids), hid), dtype=np.float32)
-        for t, x in enumerate(embs):
-            h = _gru_step(x, h, self.e_wih, self.e_whh, self.e_bih, self.e_bhh, hid)
-            fwd[t] = h
-        h_fwd_last = h
-
-        h = np.zeros(hid, dtype=np.float32)
-        bwd = np.empty((len(ids), hid), dtype=np.float32)
-        for t in range(len(ids) - 1, -1, -1):
-            h = _gru_step(
-                embs[t], h, self.e_wih_r, self.e_whh_r,
-                self.e_bih_r, self.e_bhh_r, hid,
-            )
-            bwd[t] = h
-        h_bwd_last = h  # обратное направление заканчивает на первом символе
-
+        fwd = gru_pass(embs, self.e_wih, self.e_whh, self.e_bih, self.e_bhh, hid)
+        bwd = gru_pass(embs, self.e_wih_r, self.e_whh_r, self.e_bih_r, self.e_bhh_r,
+                       hid, reverse=True)
+        # последнее состояние прямого прохода — на последнем символе,
+        # обратного — на первом
         enc_outputs = np.concatenate([fwd, bwd], axis=1)          # (S, 2*hid)
-        h0 = np.tanh(self.fc_w @ np.concatenate([h_fwd_last, h_bwd_last]) + self.fc_b)
+        h0 = np.tanh(self.fc_w @ np.concatenate([fwd[-1], bwd[0]]) + self.fc_b)
         return enc_outputs, h0
 
     # ------------------------------------------------------------ внимание
 
-    def _attention(self, h_dec, enc_outputs):
-        # energy = tanh(W · [h_dec ; enc_out_t]) для каждой позиции t
-        rep = np.broadcast_to(h_dec, (enc_outputs.shape[0], h_dec.shape[0]))
-        x = np.concatenate([rep, enc_outputs], axis=1)            # (S, 3*hid)
-        energy = np.tanh(x @ self.attn_w.T + self.attn_b)         # (S, hid)
+    def _attention(self, h_dec, enc_proj):
+        # energy = tanh(W · [h_dec ; enc_out_t] + b) для каждой позиции t;
+        # enc_proj = W_e·enc_out + b посчитан заранее
+        energy = np.tanh(enc_proj + self.attn_wh @ h_dec)         # (S, hid)
         scores = energy @ self.v_w[0]                             # (S,)
         return _softmax(scores)
 
@@ -173,12 +183,13 @@ class TranslitModel:
         word = unicodedata.normalize("NFC", word)
         ids = self.src_vocab.encode(word)
         enc_outputs, h = self._encode(ids)
+        enc_proj = enc_outputs @ self.attn_we.T + self.attn_b     # (S, hid)
 
         token = self.sos
         out_ids = []
         for _ in range(self.max_len):
             emb = self.dec_emb[token]
-            attn = self._attention(h, enc_outputs)
+            attn = self._attention(h, enc_proj)
             context = attn @ enc_outputs                          # (2*hid,)
             h = _gru_step(
                 np.concatenate([emb, context]), h,
@@ -194,22 +205,23 @@ class TranslitModel:
 
 # ---------------------------------------------------------------- загрузка
 
-_MODEL = None
+_MODELS = {}
 _LOCK = threading.Lock()
 
 
 def load(npz_path) -> TranslitModel:
-    """Ленивая загрузка одного экземпляра на процесс."""
-    global _MODEL
-    if _MODEL is None:
+    """Ленивая загрузка: один экземпляр на файл и процесс. Файлов два —
+    кириллица→транслитерация и обратная модель (core/to_cyrillic.py)."""
+    key = str(npz_path)
+    if key not in _MODELS:
         with _LOCK:
-            if _MODEL is None:
+            if key not in _MODELS:
                 path = Path(npz_path)
                 if not path.exists():
                     raise FileNotFoundError(
                         f"Не найден файл модели: {path}. Он лежит в репозитории "
-                        f"как model/translit_model.npz; если собираете сами — "
+                        f"в папке model/; если собираете сами — "
                         f"python -m tools.export_model_npz <чекпойнт.pt>"
                     )
-                _MODEL = TranslitModel(path)
-    return _MODEL
+                _MODELS[key] = TranslitModel(path)
+    return _MODELS[key]

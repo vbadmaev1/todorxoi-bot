@@ -30,8 +30,8 @@ from bot.storage import _SCHEMA, Storage  # noqa: E402
 
 REQUEST_FIELDS = [
     "created_at", "user_id", "username", "chat_id", "target", "source_script",
-    "input_text", "translit", "todo", "elapsed_ms", "steps_json", "ok", "error",
-    "letters_json",
+    "input_text", "translit", "todo", "cyrillic", "elapsed_ms", "steps_json", "ok",
+    "error", "letters_json",
 ]
 FEEDBACK_FIELDS = [
     "request_id", "created_at", "user_id", "username", "rating", "correction",

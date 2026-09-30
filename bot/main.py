@@ -65,6 +65,15 @@ async def _warmup() -> None:
     except Exception:
         log.exception("словарь калмыцких букв не загрузился — бот продолжит работу")
 
+    # тодо бичиг/транслитерация -> кириллица: сегментатор и обратная модель
+    from core import to_cyrillic
+
+    try:
+        info = await asyncio.to_thread(to_cyrillic.warmup)
+        log.info("перевод в кириллицу готов: %s", info)
+    except Exception:
+        log.exception("модели кириллицы не загрузились — ответы будут без кириллицы")
+
     # Распознавание фото — отдельная модель и отдельные зависимости
     # (onnxruntime, scipy). Если их нет, бот работает, фото не читает.
     from core import ocr

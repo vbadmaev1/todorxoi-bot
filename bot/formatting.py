@@ -39,7 +39,13 @@ def render_result(res: Result) -> str:
 
     if res.target == "fix":
         return _render_fix(res)
-    if res.target == "translit":
+    if res.target == "translit" and res.cyrillic:
+        # тодо бичиг или латиница -> кириллица; транслитерацию латиницы
+        # повторять незачем
+        if res.source_script != "translit":
+            blocks.append(f"Транслитерация:\n<code>{escape(res.translit or '')}</code>")
+        blocks.append(f"Кириллица:\n<code>{escape(res.cyrillic)}</code>")
+    elif res.target == "translit":
         blocks.append(f"<code>{escape(res.translit or '')}</code>")
     else:
         if res.translit:
@@ -130,13 +136,15 @@ def _image_caption(res: Result, page: int = 1, pages: int = 1) -> str:
 
 
 def render_ocr(res) -> list:
-    """Ответ на фото: транслитерация и тодо бичиг, по строке на столбец.
+    """Ответ на фото: кириллица, транслитерация и тодо бичиг, по строке на столбец.
 
     Полная страница — это около 2000 символов на обе записи, почти всегда
     одно сообщение. Если не влезает в лимит Telegram, режем по столбцам:
     каждая часть — законченный блок <code>, чтобы копировать было удобно.
     Возвращает список текстов сообщений."""
     blocks = [f"📷 <b>Текст с фото</b> · столбцов: {len(res.columns)}"]
+    if res.cyrillic_columns:
+        blocks += _code_blocks("Кириллица:", res.cyrillic_columns)
     blocks += _code_blocks("Транслитерация:", res.translit_columns)
     blocks += _code_blocks("Тодо бичиг:", res.columns)
     if res.low_confidence:
