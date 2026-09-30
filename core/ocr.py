@@ -33,7 +33,8 @@ from typing import Optional
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from .translit_todo import todo_to_translit
+from .punctuation import DEFAULT_PUNCT, apply_punctuation
+from .translit_todo import normalize_j, todo_to_translit
 
 _HERE = Path(__file__).resolve().parent
 _DEFAULT_MODEL = _HERE.parent / "model" / "todo_ocr_int8.onnx"
@@ -68,8 +69,11 @@ _NOT_LETTERS = set(_GAP + "\u202f")
 _LOOSE_NNBSP = re.compile(f"\u202f+(?=[{_GAP}]|$)|(?<=[{_GAP}])\u202f+|^\u202f+")
 # На странице знаки препинания — настоящие монгольские (᠂ ᠃), а
 # todo_to_translit знает только вертикальные формы из текстового режима
-# (︐ ︒). В транслитерации — обычные латинские знаки.
-_PUNCT_TO_LATIN = str.maketrans({"᠂": ",", "᠃": ".", "︖": "?", "︕": "!", "︱": "—"})
+# (︐ ︒). В транслитерации — обычные латинские знаки. У бирги латинской
+# пары нет, четыре точки — конец текста, то есть точка.
+_PUNCT_TO_LATIN = str.maketrans(
+    {"᠂": ",", "᠃": ".", "︖": "?", "︕": "!", "︱": "—", "᠀": None, "᠅": "."}
+)
 
 
 def tidy(text: str) -> str:
@@ -257,8 +261,11 @@ def draw_columns(gray: np.ndarray, boxes: list):
 
 # --------------------------------------------------------------- основное
 
-def recognize(data: bytes, overlay: bool = True) -> OcrResult:
-    """Байты картинки -> OcrResult. Синхронно и не быстро (~1 с на страницу)."""
+def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNCT) -> OcrResult:
+    """Байты картинки -> OcrResult. Синхронно и не быстро (~1 с на страницу).
+
+    punctuation — знаки препинания в ответе (PUNCT_* из punctuation.py): по
+    умолчанию убираются и те, что модель прочитала на странице."""
     started = time.perf_counter()
     steps = {}
     # OcrUnavailable — до того, как тратить время на картинку
@@ -289,6 +296,10 @@ def recognize(data: bytes, overlay: bool = True) -> OcrResult:
         )
 
     t0 = time.perf_counter()
+    # Страница размечена целиком — столбцы идут одним текстом: бирга перед
+    # первым, четыре точки после последнего. Число строк не меняется, иначе
+    # сбилась бы нумерация рамок.
+    todo = apply_punctuation(normalize_j("\n".join(todo)), punctuation).split("\n")
     translit = [to_translit(t) for t in todo]
     steps["транслитерация"] = (time.perf_counter() - t0) * 1000
 

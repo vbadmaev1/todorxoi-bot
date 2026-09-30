@@ -1,12 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-punctuation.py — знаки препинания для картинки.
+punctuation.py — знаки препинания тодо бичиг.
 
-В тексте эти знаки не ставятся: текстовый ответ /todo — это просто запись
-слов, а бирга и четыре точки размечают лист, то есть относятся именно к
-изображению. Поэтому функция вызывается только на пути рендера.
+Ставить ли их, решает пользователь в /settings; настройка действует на
+всё, где бот выдаёт тодо бичиг: текст (/todo), картинку (/image) и
+распознанное фото. Три режима:
 
-Что делает:
+  off   — без знаков (по умолчанию): все знаки препинания убираются,
+          остаются только слова;
+  frame — только разметка всего текста: бирга в начале и четыре точки
+          в конце, знаки внутри убираются;
+  all   — все знаки: бирга, запятые, точки, вопрос и восклицание, четыре
+          точки в конце.
+
+Знаки:
 
   ᠀  бирга (U+1800)      — в самом начале текста, знак начала записи;
   ᠂  запятая (U+1802)    — вместо обычной;
@@ -17,20 +24,24 @@ punctuation.py — знаки препинания для картинки.
 вопросительным или восклицательным знаком, знак остаётся, а четыре точки
 добавляются после него.
 
-Бирга и четыре точки — это разметка целой записи, поэтому на коротком
-тексте они выглядят громоздко: одно слово не нуждается в том, чтобы его
-открывали и закрывали. Ставим их только начиная с FRAME_MIN_CHARS
-символов исходного текста; запятые и точки внутри работают всегда.
-
 На вход приходит уже готовый юникод тодо бичиг, где знаки препинания
 записаны вертикальными презентационными формами (︒ ︐ ︕ ︖) — так их
-превращает таблица в translit_todo.py.
+превращает таблица в translit_todo.py, — или настоящими монгольскими
+(᠂ ᠃), как их читает модель распознавания фото.
 """
+
+import re
 
 BIRGA = "᠀"
 COMMA = "᠂"
 FULL_STOP = "᠃"
 FOUR_DOTS = "᠅"
+
+PUNCT_OFF = "off"
+PUNCT_FRAME = "frame"
+PUNCT_ALL = "all"
+PUNCT_MODES = (PUNCT_OFF, PUNCT_FRAME, PUNCT_ALL)
+DEFAULT_PUNCT = PUNCT_OFF
 
 # то, что приезжает из таблицы translit_todo.py
 _SRC_COMMA = "︐"
@@ -39,47 +50,63 @@ _SRC_EXCL = "︕"
 _SRC_QUES = "︖"
 
 _TERMINAL = (_SRC_EXCL, _SRC_QUES)
+_STOPS = (_SRC_STOP, FULL_STOP)
 
-# с какой длины исходного текста имеет смысл обрамлять запись
-FRAME_MIN_CHARS = 100
+# Всё, что убирается в режимах off и frame: вертикальные формы из таблицы
+# (︐ ︑ ︒ ︕ ︖ ︽ ︾ и тире ︱), монгольские знаки — и то, что таблица
+# пропускает как есть: точка с запятой, скобки, кавычки-ёлочки, многоточие.
+_MARKS = "︐︑︒︕︖︽︾︱᠀᠁᠂᠃᠄᠅᠈᠉;()[]«»“”„…"
+_MARKS_RE = re.compile(f"[{re.escape(_MARKS)}]+")
+_SPACES_RE = re.compile(" {2,}")
 
 
-def needs_frame(source_text: str) -> bool:
-    """Достаточно ли текст велик, чтобы обрамлять его биргой и четырьмя
-    точками. Считаем по исходному сообщению — это то, что видит человек."""
-    return len((source_text or "").strip()) > FRAME_MIN_CHARS
+def strip_marks(text: str) -> str:
+    """Убирает знаки препинания, не трогая слова и переводы строк.
+
+    Знак меняется на пробел, а не выбрасывается: в «ulus,mani» без пробела
+    слова иначе слиплись бы в одно."""
+    lines = []
+    for line in text.split("\n"):
+        line = _SPACES_RE.sub(" ", _MARKS_RE.sub(" ", line))
+        lines.append(line.strip(" "))
+    return "\n".join(lines)
+
+
+def _frame(text: str) -> str:
+    """Бирга перед первой непустой строкой, четыре точки — в конце
+    последней. Точка в самом конце — это конец всего текста, её заменяют
+    четыре точки; вопрос и восклицание остаются, четыре точки встают
+    после них."""
+    lines = text.split("\n")
+    filled = [i for i, line in enumerate(lines) if line.strip()]
+    if not filled:
+        return text
+    last = lines[filled[-1]].rstrip()
+    if last[-1] in _STOPS:
+        last = last[:-1]
+    lines[filled[-1]] = last + FOUR_DOTS
+    lines[filled[0]] = BIRGA + lines[filled[0]].lstrip(" ")
+    return "\n".join(lines)
 
 
 def add_punctuation(todo_text: str, frame: bool = True) -> str:
-    """Расставляет знаки препинания тодо бичиг в готовой строке.
+    """Расставляет все знаки препинания тодо бичиг в готовой строке.
 
     frame=False — без бирги в начале и без четырёх точек в конце: точка
     в конце тогда остаётся обычной."""
     if not todo_text:
         return todo_text
-
     text = todo_text.replace(_SRC_COMMA, COMMA)
+    if frame:
+        text = _frame(text)
+    return text.replace(_SRC_STOP, FULL_STOP)
 
-    # хвост считаем по тексту без концевых пробелов и переводов строк,
-    # чтобы «слово.\n» тоже посчиталось концом текста
-    stripped = text.rstrip()
-    trailing = text[len(stripped):]
-    last = stripped[-1] if stripped else ""
 
-    if not frame:
-        # короткий текст: ни бирги, ни четырёх точек — только обычные знаки
-        return text.replace(_SRC_STOP, FULL_STOP)
-
-    if last == _SRC_STOP:
-        # последняя точка — это конец всего текста
-        body = stripped[:-1].replace(_SRC_STOP, FULL_STOP)
-        text = body + FOUR_DOTS + trailing
-    elif last in _TERMINAL:
-        # вопрос или восклицание оставляем и дописываем четыре точки
-        body = stripped[:-1].replace(_SRC_STOP, FULL_STOP)
-        text = body + last + FOUR_DOTS + trailing
-    else:
-        # текст без концевого знака — четыре точки не навязываем
-        text = text.replace(_SRC_STOP, FULL_STOP)
-
-    return BIRGA + text
+def apply_punctuation(todo_text: str, mode: str = DEFAULT_PUNCT) -> str:
+    """Знаки препинания по настройке пользователя (PUNCT_*)."""
+    if not todo_text:
+        return todo_text
+    if mode == PUNCT_ALL:
+        return add_punctuation(todo_text)
+    text = strip_marks(todo_text)
+    return _frame(text) if mode == PUNCT_FRAME else text

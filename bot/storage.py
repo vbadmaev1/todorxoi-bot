@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
     size       TEXT,
     font       TEXT,
     fix_letters TEXT,               -- on | off: исправлять текст без калмыцких букв
+    punctuation TEXT,               -- off | frame | all: знаки препинания тодо бичиг
     updated_at TEXT NOT NULL
 );
 
@@ -83,7 +84,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_unique
 """
 
 
-_SETTING_FIELDS = ("fg", "bg", "size", "font", "fix_letters")
+_SETTING_FIELDS = ("fg", "bg", "size", "font", "fix_letters", "punctuation")
 
 
 def _now() -> str:
@@ -104,6 +105,7 @@ class Storage:
         "ALTER TABLE user_settings ADD COLUMN font TEXT",
         "ALTER TABLE user_settings ADD COLUMN fix_letters TEXT",
         "ALTER TABLE requests ADD COLUMN letters_json TEXT",
+        "ALTER TABLE user_settings ADD COLUMN punctuation TEXT",
     )
 
     def connect(self) -> None:
@@ -212,7 +214,8 @@ class Storage:
     def _get_settings(self, user_id: int) -> dict:
         with self._lock:
             row = self._conn.execute(
-                "SELECT fg, bg, size, font, fix_letters FROM user_settings WHERE user_id = ?",
+                "SELECT fg, bg, size, font, fix_letters, punctuation FROM user_settings "
+                "WHERE user_id = ?",
                 (user_id,),
             ).fetchone()
         if not row:

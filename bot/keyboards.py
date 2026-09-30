@@ -20,6 +20,7 @@ from . import texts
 #   set:pick:<поле>         — открыть палитру/список размеров
 #   set:set:<поле>:<знач>   — выбрать значение
 #   set:toggle:fix_letters  — исправлять текст без калмыцких букв: вкл/выкл
+#   set:set:punctuation:<режим> — знаки препинания: off | frame | all
 #   set:back:-              — вернуться в меню настроек
 #   set:reset:-             — сбросить всё на умолчания
 
@@ -35,6 +36,12 @@ FONT_LABELS = {
     "demberil": "Demberil",
     "garcaq": "Garcaq",
     "zakaa": "Zakaa",
+}
+# знаки препинания тодо бичиг, см. core/punctuation.py
+PUNCT_LABELS = {
+    "off": "не ставить",
+    "frame": "только начало и конец",
+    "all": "все",
 }
 
 
@@ -99,7 +106,9 @@ def result_keyboard(request_id: int, target: str, with_feedback: bool = True):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def settings_menu(opts, fix_letters: bool = False) -> InlineKeyboardMarkup:
+def settings_menu(
+    opts, fix_letters: bool = False, punctuation: str = "off"
+) -> InlineKeyboardMarkup:
     """Главный экран /settings: что менять."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -125,6 +134,12 @@ def settings_menu(opts, fix_letters: bool = False) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text=f"✒️ Шрифт: {FONT_LABELS.get(opts.font, opts.font)}",
                     callback_data=f"{CB_SETTINGS}:pick:font",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"🔣 Знаки: {PUNCT_LABELS.get(punctuation, punctuation)}",
+                    callback_data=f"{CB_SETTINGS}:pick:punctuation",
                 )
             ],
             [
@@ -188,6 +203,23 @@ def font_picker(current: str) -> InlineKeyboardMarkup:
         for key, label in FONT_LABELS.items()
     ]
     rows = _grid(buttons, per_row=2)
+    rows.append(
+        [InlineKeyboardButton(text="‹ Назад", callback_data=f"{CB_SETTINGS}:back:-")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def punct_picker(current: str) -> InlineKeyboardMarkup:
+    """Три режима знаков препинания — каждый своей строкой: подписи длинные."""
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=label + (" ✓" if key == current else ""),
+                callback_data=f"{CB_SETTINGS}:set:punctuation:{key}",
+            )
+        ]
+        for key, label in PUNCT_LABELS.items()
+    ]
     rows.append(
         [InlineKeyboardButton(text="‹ Назад", callback_data=f"{CB_SETTINGS}:back:-")]
     )

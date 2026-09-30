@@ -29,6 +29,7 @@ from .translit_todo import (
     todo_to_translit,
     translit_to_todo,
 )
+from .punctuation import DEFAULT_PUNCT, PUNCT_MODES, apply_punctuation
 
 log = logging.getLogger(__name__)
 
@@ -218,6 +219,7 @@ def process(
     target: str,
     options: Optional[ImageOptions] = None,
     fix_letters: bool = False,
+    punctuation: str = DEFAULT_PUNCT,
 ) -> Result:
     """Основная функция. Синхронная и не быстрая (модель) — в боте её
     нужно звать через asyncio.to_thread.
@@ -225,7 +227,8 @@ def process(
     options — настройки картинки конкретного пользователя; для режимов
     транслитерации и тодо бичиг не используются. fix_letters — исправлять
     ли кириллицу, набранную без ә ө ү һ җ ң (настройка в /settings,
-    по умолчанию выключена)."""
+    по умолчанию выключена). punctuation — знаки препинания тодо бичиг
+    (PUNCT_* из punctuation.py, по умолчанию без знаков)."""
     opts = options or ImageOptions()
     text = _check_input(text)
     script = detect_script(text)
@@ -266,7 +269,7 @@ def process(
             )
         res.translit = _to_translit(text, script, res, fix_letters)
         t0 = time.perf_counter()
-        res.todo = translit_to_todo(res.translit)
+        res.todo = apply_punctuation(translit_to_todo(res.translit), punctuation)
         res.steps_ms["translit→тодо"] = (time.perf_counter() - t0) * 1000
 
     elif target == TARGET_IMAGE:
@@ -302,21 +305,21 @@ def process(
         # Знаки препинания в обоих случаях расставляются одинаково: в
         # семейство Clear Script они дорисованы отдельными глифами, см.
         # tools/add_marks_to_fonts.py.
-        from .punctuation import add_punctuation, needs_frame
-
         t0 = time.perf_counter()
+        plain_todo = res.todo
+        res.todo = apply_punctuation(plain_todo, punctuation)
         if opts.uses_rules:
             from .clear_script import fit_to_font, translit_to_font
 
-            source = res.translit or todo_to_translit(res.todo)
-            # запись общая для семейства, подгонка под начертание — своя
-            render_text = fit_to_font(translit_to_font(source), opts.font)
+            source = res.translit or todo_to_translit(plain_todo)
+            # Знаки — до подгонки: она удваивает пробелы между словами, а
+            # убранный знак оставляет после себя пробел, который надо
+            # схлопнуть с соседним. Запись общая для семейства, подгонка
+            # под начертание — своя.
+            record = apply_punctuation(translit_to_font(source), punctuation)
+            render_text = fit_to_font(record, opts.font)
         else:
             render_text = res.todo
-        # бирга и четыре точки — только для длинного текста
-        render_text = add_punctuation(
-            render_text, frame=needs_frame(res.source_text)
-        )
         res.steps_ms["знаки"] = (time.perf_counter() - t0) * 1000
 
         t0 = time.perf_counter()
