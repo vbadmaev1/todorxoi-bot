@@ -410,6 +410,59 @@ def normalize_j(todo_text):
     return _TODO_J_INITIAL_BACK.sub("ᡚ", _TODO_JI.sub("ᠴ", todo_text))
 
 
+# Дифтонг внутри слова: гласная + i перед согласной пишется через y —
+# xoyišidu, bayixu, züyil, üzügiyin. Так в корпусе почти без исключений
+# (a: 63 781 против 15, o: 10 054 против 136; без y — заимствования и
+# опечатки). В конце слова, наоборот, без y: dalai, ügei, toloγoi (55 107
+# против 95) — его не трогаем; перед гласной корпус пишет и так, и так.
+# Модель распознавания y иногда пропускает (xoišidu, baixu): на рисунке
+# дифтонга буквы y почти не видно.
+_TODO_VOWELS = "ᠠᡄᡅᡆᡇᡈᡉ"
+_TODO_CONSONANTS = "".join(
+    chr(c) for c in range(0x1820, 0x18AB) if chr(c) not in _TODO_VOWELS + "ᡃ"
+)
+_TODO_DIPHTHONG_I = re.compile(f"(?<=[{_TODO_VOWELS}ᡃ])ᡅ(?=[{_TODO_CONSONANTS}])")
+# Родительный и винительный падеж, написанные отдельно (через узкий
+# пробел), — yin и yigi после любой основы: tere-yigi, mani-yigi,
+# öün-yigi, bičiq-yigi (yigi 2740 против igi 2, yin 213 против in 18).
+# Модель распознавания читает их как in и igi: начальная y на рисунке
+# почти сливается с i. С y и кириллица верная: üge yin -> үгин, а не «үг ин».
+_TODO_CASE_SUFFIX = re.compile(r"(?<![ᠠ-ᢪ])(?=ᡅ(?:ᠨ|ᡎᡅ)(?![ᠠ-ᢪ]))")
+
+
+def normalize_yi(todo_text):
+    """Пропущенная y: гласная + ᡅ перед согласной -> гласная + ᡕᡅ
+    (xoišidu -> xoyišidu); отдельное окончание in, igi -> yin, yigi."""
+    return _TODO_CASE_SUFFIX.sub("ᡕ", _TODO_DIPHTHONG_I.sub("ᡕᡅ", todo_text))
+
+
+# Знак долготы стоит только после гласной: после согласной его нет ни в
+# корпусе, ни в разметке настоящих рукописей, ни в синтетике. В синьцзянских
+# учебниках долгота нарисована кружком сбоку от согласной перед гласной, и
+# модель так и ставит её: luq:a, dar:a вместо luγā, darā. Переносим за
+# гласную; если у гласной долгота уже есть (caq:ā) или гласной нет (čamč:),
+# лишний знак просто убираем.
+_TODO_LONG_AFTER_CONSONANT = re.compile(f"(?<=[{_TODO_CONSONANTS}])ᡃ([{_TODO_VOWELS}])(ᡃ?)")
+_TODO_STRAY_LONG = re.compile(f"(?<=[{_TODO_CONSONANTS}])ᡃ")
+# Окончание -iia: его нет ни в корпусе, ни в разметке, а -iyin — 24 тыс.
+# раз. Модель путает конечную n с конечной a (у обеих хвост влево) и
+# читает nutugiyin как nutugiia.
+_TODO_IIA = re.compile(r"ᡅᡅᠠ(?![ᠠ-ᢪ])")
+
+
+def fix_misreads(todo_text):
+    """Ошибки чтения, которых в правильном тексте не бывает: долгота после
+    согласной (dar:a -> darā) и окончание -iia (nutugiia -> nutugiyin)."""
+    text = _TODO_LONG_AFTER_CONSONANT.sub(r"\1ᡃ", todo_text)
+    return _TODO_IIA.sub("ᡅᡕᡅᠨ", _TODO_STRAY_LONG.sub("", text))
+
+
+def normalize_ocr(todo_text):
+    """Всё, чем распознанный текст приводится к норме письма: ǰ, пропущенная
+    y, ошибки чтения."""
+    return normalize_yi(fix_misreads(normalize_j(todo_text)))
+
+
 def todo_to_translit(todo_text):
     """Юникодный текст тодо бичиг -> транслитерация проекта.
 

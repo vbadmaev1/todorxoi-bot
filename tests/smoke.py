@@ -802,7 +802,28 @@ async def _check_ocr(dp, bot, session, storage):
           "распознанное фото: кириллица по строке на столбец")
     from core.broken_words import join_broken_words
     from core.translit_todo import translit_to_todo as _t2t
+    from core.translit_todo import normalize_yi
 
+    check(ocr.to_translit(normalize_yi(_t2t("xoišidu baixu züil dalai ügei"))) == "xoyišidu bayixu züyil dalai ügei",
+          "дифтонг внутри слова пишется через y (xoišidu -> xoyišidu), в конце слова — нет (dalai)")
+    check(ocr.to_translit(normalize_yi(_t2t("üge-in ken-igi tere-yigi inu"))) == "üge yin ken yigi tere yigi inu",
+          "отдельное окончание in, igi -> yin, yigi; inu не трогается")
+    from core.translit_todo import fix_misreads
+    check(ocr.to_translit(fix_misreads("ᠯᡇᡎᡃᠠ ᡑᠠᠷᡃᠠ ᠨᡇᡐᡇᡎᡅᡅᠠ") + " " + _t2t("γaria")) == "luγā darā nutugiyin γaria",
+          "долгота после согласной переносится за гласную (dar:a -> darā), -iia -> -iyin")
+    _junk = _t2t("bi q ger-tü l ü dm-ni")
+    check(ocr.to_translit(ocr.tidy(_junk)) == "bi ger tü ü ni",
+          "«слова» без гласной (мусор от скобок, цифр, латиницы) убираются, короткие слова остаются")
+    import numpy as _np
+    from core.page_layout import split_stacked
+
+    def _col(x, *spans):                     # столбец из кусков (y0, y1) толщиной 40 px
+        return [((slice(y0, y1), slice(x, x + 40)), _np.ones((y1 - y0, 40), bool)) for y0, y1 in spans]
+    full = _col(0, (0, 1000))
+    a1, a2 = _col(50, (0, 400), (700, 1000)), _col(100, (0, 450), (680, 1000))
+    order = [(c[0][0][1].start, c[0][0][0].start) for c in split_stacked([full, a1, a2], 1)]
+    check(order == [(0, 0), (50, 0), (100, 0), (50, 700), (100, 680)],
+          "два блока друг над другом: сначала верхний слева направо, потом нижний; сплошной столбец не режется")
     check(ocr.to_translit(join_broken_words(_t2t("örgöǰi-kü ged-eq"))) == "örgöǰikü gedeq",
           "разрыв пера внутри слова склеивается: örgöǰi kü -> örgöǰikü, ged eq -> gedeq")
     check(ocr.to_translit(join_broken_words(_t2t("erdeni-dü nutuq tu"))) == "erdeni dü nutuq tu",

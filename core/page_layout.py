@@ -12,7 +12,7 @@ page_layout.py — разметка страницы с вертикальным
 1. перевод в серое с учётом цвета (to_gray: текст тёмный, фон светлый),
    бинаризация (для фото — с выравниванием фона); пыль — компоненты меньше
    трети типичной точки на этой же картинке; сплошные пятна (стол вокруг
-   страницы, тень, чёрная полоса) — тоже прочь;
+   страницы, тень, чёрная полоса), рамки и линейки, рисунки — тоже прочь;
 2. наклон: угол, при котором вертикальная проекция чернил самая «резкая»
    (±5°);
 3. столбцы — по стержням букв: у тодо бичиг в каждом столбце вертикальная
@@ -24,6 +24,8 @@ page_layout.py — разметка страницы с вертикальным
    границу, не отрезается и не попадает к соседу. Слипшиеся — режутся;
 5. у страницы (от 4 столбцов) выкидываются колонтитул, заголовок, номер
    страницы; у любой картинки — клочки, далеко оторванные от текста;
+   блоки, стоящие друг над другом (два упражнения в одних столбцах),
+   режутся по пустой полосе между ними и читаются по очереди;
 6. столбец собирается заново: серые пиксели исходника под маской только
    его компонент (и бледных волосных линий, которые от них отходят),
    остальное белое, поля pad × толщина — как в рамках, на которых училась
@@ -247,6 +249,37 @@ def rule_lines(lab, s):
     return line
 
 
+def figures(lab, s):
+    """Метки компонент рисунка: иллюстрация в учебнике или книге и всё, что целиком лежит внутри её рамки
+    (лепестки, серединки цветов — отдельные компоненты). Модель читает рисунок как столбец мусора. Рисунок
+    больше 25 толщин штриха в обе стороны и шире 4 типичных слов этой же картинки (цветы на странице учебника —
+    в 8 раз); крупное каллиграфическое слово в строке рукописи бывает больше 25 толщин (штрих там тонкий), но
+    шире соседних слов — не больше чем в 2 раза. Рамка страницы тоже большая, но её чернила — по краю, а у
+    рисунка — и в середине; рамку и текст внутри неё не трогаем."""
+    fig = np.zeros(lab.max() + 1, bool)
+    objs = ndi.find_objects(lab)
+    area = np.bincount(lab.ravel())
+    words = [sx.stop - sx.start for i, (sy, sx) in enumerate(objs, 1) if sy is not None and area[i] >= 20 * s * s]
+    if not words:
+        return fig
+    word_w = float(np.median(words))
+    boxes = []
+    for i, (sy, sx) in enumerate(objs, 1):
+        if sy is None or sy.stop - sy.start < 25 * s or sx.stop - sx.start < max(25 * s, 4 * word_w):
+            continue
+        m = lab[sy, sx] == i
+        h, w = m.shape
+        inner = m[h // 5:h - h // 5, w // 5:w - w // 5].sum()
+        if inner >= 0.2 * m.sum():
+            fig[i] = True
+            boxes.append((sy.start - s, sy.stop + s, sx.start - s, sx.stop + s))
+    for y0, y1, x0, x1 in boxes:
+        for i, (sy, sx) in enumerate(objs, 1):
+            if sy is not None and sy.start >= y0 and sy.stop <= y1 and sx.start >= x0 and sx.stop <= x1:
+                fig[i] = True
+    return fig
+
+
 # ---------------------------------------------------------------- наклон
 
 def _sharpness(ink_small, angle):
@@ -376,7 +409,7 @@ def column_width(cols_pieces, s):
 
 def margin_rows(ink, w, s):
     """Строки колонтитула, заголовка, номера страницы: полоса над или под основным текстом, отделённая от него
-    совсем пустыми строками, низкая (строка кириллицы или цифр ниже слова тодо бичиг) и широкая (идёт поперёк
+    пустыми строками (не меньше полутолщины столбца), низкая (строка кириллицы или цифр ниже слова тодо бичиг) и широкая (идёт поперёк
     нескольких столбцов). Знак препинания в конце столбца узкий, а рядом с ним стоят другие столбцы — не трогаем."""
     rows = ink.sum(1)
     filled = rows > s                                             # строка с чем-то, кроме редкой пыли
@@ -391,7 +424,20 @@ def margin_rows(ink, w, s):
     tall = [k for k, (y0, y1) in enumerate(bands) if y1 - y0 >= 0.75 * w]
     if not tall:
         return drop
-    for k in list(range(tall[0])) + list(range(tall[-1] + 1, len(bands))):
+    # Стопка низких полос вплотную к тексту (промежутки меньше полутолщины столбца), в сумме высокая, — сам текст:
+    # если в соседних столбцах на одной высоте одно и то же слово, промежутки между его частями совпадают, и над
+    # текстом выходит стопка низких широких «строк» (так пропадали первые слова столбцов на титуле книги).
+    # Одна низкая полоска у края текста (пометка внизу страницы у Позднеева) — по-прежнему колонтитул.
+    top, bottom = tall[0], tall[-1]
+    while top > 0 and bands[top][0] - bands[top - 1][1] < 0.5 * w:
+        top -= 1
+    if top < tall[0] and bands[tall[0] - 1][1] - bands[top][0] < 0.75 * w:
+        top = tall[0]
+    while bottom + 1 < len(bands) and bands[bottom + 1][0] - bands[bottom][1] < 0.5 * w:
+        bottom += 1
+    if bottom > tall[-1] and bands[bottom][1] - bands[tall[-1] + 1][0] < 0.75 * w:
+        bottom = tall[-1]
+    for k in list(range(top)) + list(range(bottom + 1, len(bands))):
         y0, y1 = bands[k]
         if is_line(y0, y1):
             drop[y0:y1] = True
@@ -439,6 +485,78 @@ def drop_strays(cols_pieces, s):
             keep = [p for p in keep if p[1].sum() > 4 * s * s or (bx0 - 0.5 * w <= (p[0][1].start + p[0][1].stop) / 2 <= bx1 + 0.5 * w)]
         out.append(keep)
     return out
+
+
+# Промежуток внутри столбца больше стольких толщин столбца — граница между блоками, а не пробел между словами.
+# Пробелы на книжных страницах и в рукописях — до 0.9 толщины, граница между упражнениями A и B в учебнике — 5–9.
+BLOCK_GAP = 2.5
+
+
+def _gaps(pieces, min_gap):
+    """Пустые промежутки столбца по высоте (y0, y1) не меньше min_gap."""
+    spans = sorted((p[0][0].start, p[0][0].stop) for p in pieces)
+    out, end = [], spans[0][1]
+    for y0, y1 in spans[1:]:
+        if y0 - end >= min_gap:
+            out.append((end, y0))
+        end = max(end, y1)
+    return out
+
+
+def split_stacked(cols_pieces, s):
+    """Блоки друг над другом -> столбцы в порядке чтения.
+
+    В учебнике два упражнения (или два стихотворения) стоят одно над другим в одних и тех же столбцах. Столбец
+    читается сверху вниз, и строка верхнего блока склеивалась со строкой нижнего. Граница между блоками —
+    широкая пустая полоса поперёк соседних столбцов: если она есть хотя бы у двух соседей на одной высоте,
+    столбцы этой полосы режутся по ней и идут так: верхние куски слева направо, потом нижние. К блоку
+    присоединяются и соседние столбцы, целиком лежащие выше или ниже полосы (строка одного блока длиннее или их
+    больше); столбец, который полосу пересекает (сплошной текст рядом), блок заканчивает."""
+    w = column_width(cols_pieces, s)
+    if w is None:
+        return cols_pieces
+    n = len(cols_pieces)
+    gaps = [_gaps(c, BLOCK_GAP * w) if c else [] for c in cols_pieces]
+
+    def fit(k, band):
+        """Столбец k с полосой band -> (полоса, режется ли он) или None, если чернила её пересекают."""
+        for g0, g1 in gaps[k]:
+            b0, b1 = max(band[0], g0), min(band[1], g1)
+            if b1 - b0 >= w:
+                return (b0, b1), True
+        # столбец целиком в одном ярусе: полоса сужается до промежутка между ним и другим ярусом
+        top = min(p[0][0].start for p in cols_pieces[k]) if cols_pieces[k] else band[1]
+        bottom = max(p[0][0].stop for p in cols_pieces[k]) if cols_pieces[k] else band[0]
+        if bottom <= band[1] - w:
+            return (max(band[0], bottom), band[1]), False
+        if top >= band[0] + w:
+            return (band[0], min(band[1], top)), False
+        return None
+
+    runs, k, free = [], 0, 0                                      # free — левее него столбцы уже в блоке
+    while k < n:
+        for band in gaps[k]:
+            lo, hi, cut = k, k, 1
+            while hi + 1 < n and (r := fit(hi + 1, band)):
+                band, hi, cut = r[0], hi + 1, cut + r[1]
+            if cut >= 2:
+                while lo - 1 >= free and (r := fit(lo - 1, band)) and not r[1]:
+                    lo -= 1
+                runs.append((lo, hi, (band[0] + band[1]) / 2))
+                k = free = hi + 1
+                break
+        else:
+            k += 1
+    if not runs:
+        return cols_pieces
+    out, k = [], 0
+    for lo, hi, mid in runs:
+        out += cols_pieces[k:lo]
+        parts = [[[p for p in cols_pieces[j] if ((p[0][0].start + p[0][0].stop) / 2 >= mid) == below]
+                  for j in range(lo, hi + 1)] for below in (False, True)]
+        out += [c for part in parts for c in part if c]
+        k = hi + 1
+    return out + cols_pieces[k:]
 
 
 # Бледные пиксели, связанные со штрихами столбца, тоже его: порог «бледного» — эта доля пути от порога Оцу
@@ -593,7 +711,7 @@ def split_page(img, pad=0.1, deskew=True, debug=False):
     lab, _ = ndi.label(ink, structure=_EIGHT)
     area = np.bincount(lab.ravel())
     s = text_stroke_width(ink, lab, area)
-    keep = (area >= speck_area(area[1:], s)) & ~solid_components(lab, ink, s) & ~rule_lines(lab, s)
+    keep = (area >= speck_area(area[1:], s)) & ~solid_components(lab, ink, s) & ~rule_lines(lab, s) & ~figures(lab, s)
     horiz = horizontal_text(lab, len(area) - 1)
     if area[horiz].sum() < 0.5 * area[1:].sum():                 # строки рядом с тодо бичиг (афиша, вывеска);
         keep &= ~horiz                                            # а страницу, где их большинство, не трогаем:
@@ -611,7 +729,7 @@ def split_page(img, pad=0.1, deskew=True, debug=False):
     cols = assign_components(lab, cuts)
     cols = [[_tight(sl, m) for sl, m in c if m.any()] for c in cols]
     cols = drop_margins(cols, ink, s)
-    cols = drop_strays(cols, s)
+    cols = split_stacked(drop_strays(cols, s), s)
     out, boxes = [], []
     for c in cols:
         if not c or sum(int(m.sum()) for _, m in c) < 8 * s * s:

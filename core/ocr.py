@@ -43,7 +43,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from .punctuation import DEFAULT_PUNCT, apply_punctuation
-from .translit_todo import normalize_j, todo_to_translit
+from .translit_todo import normalize_ocr, todo_to_translit
 
 log = logging.getLogger(__name__)
 
@@ -96,7 +96,29 @@ _PUNCT_TO_LATIN = str.maketrans(
 )
 
 
+# Слово тодо бичиг без гласной — почти всегда не слово, а то, чего нет в
+# алфавите модели: скобки 『』（）, цифры, латиница, «+», китайские знаки
+# препинания; модель читает их как одну-две согласные (q, l, p, m, dm, yt).
+# В разметке рукописей таких «слов» 4 на 80 тыс., в корпусе 0.05%. По
+# уверенности модели их не отличить: мусорную q она видит с 1.0, а
+# настоящее ü — бывает и с 0.6. Обрывки разорванного слова (d uu) к этому
+# времени уже склеены (Model.read), знаки препинания остаются.
+_TODO_VOWELS = set("ᠠᡄᡅᡆᡇᡈᡉ")
+_WORD = re.compile("[^ \u202f]+")
+_LETTER = re.compile("[\u1820-\u18aa]")
+_MARKS = re.compile("[\u180b-\u180f\u1820-\u18aa]")              # буквы и селекторы вариантов
+
+
+def _drop_vowelless(match) -> str:
+    word = match.group()
+    letters = _LETTER.findall(word)
+    if not letters or len(letters) > 2 or any(ch in _TODO_VOWELS for ch in letters):
+        return word
+    return _MARKS.sub("", word)
+
+
 def tidy(text: str) -> str:
+    text = _WORD.sub(_drop_vowelless, text)
     text = _LOOSE_NNBSP.sub("", text)
     text = re.sub("\u202f{2,}", "\u202f", text)
     return re.sub(" {2,}", " ", text).strip(" ")
@@ -469,7 +491,7 @@ def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNC
     # Страница размечена целиком — столбцы идут одним текстом: бирга перед
     # первым, четыре точки после последнего. Число строк не меняется, иначе
     # сбилась бы нумерация рамок.
-    todo = apply_punctuation(normalize_j("\n".join(todo)), punctuation).split("\n")
+    todo = apply_punctuation(normalize_ocr("\n".join(todo)), punctuation).split("\n")
     translit = [to_translit(t) for t in todo]
     steps["транслитерация"] = (time.perf_counter() - t0) * 1000
 
