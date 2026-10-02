@@ -25,8 +25,9 @@ page_layout.py — разметка страницы с вертикальным
 5. у страницы (от 4 столбцов) выкидываются колонтитул, заголовок, номер
    страницы; у любой картинки — клочки, далеко оторванные от текста;
 6. столбец собирается заново: серые пиксели исходника под маской только
-   его компонент, остальное белое, поля pad × толщина — как в рамках, на
-   которых училась модель.
+   его компонент (и бледных волосных линий, которые от них отходят),
+   остальное белое, поля pad × толщина — как в рамках, на которых училась
+   модель.
 
 Проверено на синтетическом тесте (3422 картинки, 1–3 столбца: CER 0.109%
 против 0.110% у split_columns) и на «Калмыцких сказках» Позднеева (1889):
@@ -224,6 +225,28 @@ def solid_components(lab, ink, s):
     return solid
 
 
+def rule_lines(lab, s):
+    """Метки компонент — вертикальных линий: рамка страницы, её край, линейка между столбцами. Толщиной они со
+    штрих, и solid_components их не берёт, а модель читает такую линию как столбец «ozozoooo…». Линия длиннее
+    40 толщин, почти в каждой строке не шире 2 толщин и идёт ровно: середина строки отходит от плавной кривой
+    (парабола — на фото страница выгнута) меньше чем на толщину. Длинное слово жирного шрифта из одних узких
+    петель («бусы» oooo) тоже тонкое, но петли виляют: на синтетике у таких слов отход от 1.3 толщины, у рамки
+    — до 0.45."""
+    line = np.zeros(lab.max() + 1, bool)
+    for i, (sy, sx) in enumerate(ndi.find_objects(lab), 1):
+        if sy is None or sy.stop - sy.start < 40 * s:
+            continue
+        m = lab[sy, sx] == i
+        rows = m.any(1)
+        left = np.argmax(m, 1)[rows]
+        right = m.shape[1] - np.argmax(m[:, ::-1], 1)[rows]
+        if np.mean(right - left <= 2.2 * s) < 0.95:
+            continue
+        y, mid = np.flatnonzero(rows), (left + right) / 2
+        line[i] = np.abs(mid - np.polyval(np.polyfit(y, mid, 2), y)).max() <= s
+    return line
+
+
 # ---------------------------------------------------------------- наклон
 
 def _sharpness(ink_small, angle):
@@ -418,9 +441,22 @@ def drop_strays(cols_pieces, s):
     return out
 
 
-def render_column(pieces, gray, pad):
-    """Столбец из своих кусков: серые пиксели исходника под маской столбца (расширенной на 2 px, чтобы не срезать
-    сглаженную кромку — для жирных шрифтов это важно), всё остальное белое; поля pad × толщина, как в split_columns."""
+# Бледные пиксели, связанные со штрихами столбца, тоже его: порог «бледного» — эта доля пути от порога Оцу
+# столбца до белого, дотягиваемся не дальше FAINT_REACH × толщина штриха от уверенных чернил.
+FAINT = 0.9
+FAINT_REACH = 2
+
+
+def render_column(pieces, gray, pad, s):
+    """Столбец из своих кусков: серые пиксели исходника под маской столбца, всё остальное белое; поля pad ×
+    толщина, как в split_columns.
+
+    Маска — чернила столбца, расширенные на 2 px (не срезать сглаженную кромку — для жирных шрифтов это важно),
+    и бледные штрихи, которые от них отходят. У рукописи и литографии соединение букв бывает волосной линией
+    светлее порога бинаризации: без неё слово на картинке для модели разорвано, и она ставит пробел посреди
+    слова (yos bi, kir stos). Расширяемся только по бледным пикселям и недалеко, поэтому соседний столбец не
+    затягивается. Настоящие строки test: CER 5.0% -> 3.7%, точных строк 39% -> 51%; синтетика без изменений,
+    у Позднеева поменялось 7 столбцов из 180."""
     y0, y1, x0, x1 = _bbox(pieces)
     mask = np.zeros((y1 - y0, x1 - x0), bool)
     for sl, m in pieces:
@@ -432,6 +468,9 @@ def render_column(pieces, gray, pad):
     crop = np.full(mask.shape, 255, np.uint8)
     gy0, gy1, gx0, gx1 = max(0, y0 - q), min(H, y1 + q), max(0, x0 - q), min(W, x1 + q)
     crop[gy0 - (y0 - q):gy1 - (y0 - q), gx0 - (x0 - q):gx1 - (x0 - q)] = gray[gy0:gy1, gx0:gx1]
+    t = _otsu(crop[mask])
+    faint = crop < t + (255 - t) * FAINT
+    mask = ndi.binary_dilation(mask, iterations=max(1, round(FAINT_REACH * s)), mask=mask | faint)
     out = np.where(mask, crop, 255).astype(np.uint8)[2:-2, 2:-2]
     return Image.fromarray(out), (x0 - p, y0 - p, x1 + p, y1 + p)
 
@@ -554,7 +593,7 @@ def split_page(img, pad=0.1, deskew=True, debug=False):
     lab, _ = ndi.label(ink, structure=_EIGHT)
     area = np.bincount(lab.ravel())
     s = text_stroke_width(ink, lab, area)
-    keep = (area >= speck_area(area[1:], s)) & ~solid_components(lab, ink, s)
+    keep = (area >= speck_area(area[1:], s)) & ~solid_components(lab, ink, s) & ~rule_lines(lab, s)
     horiz = horizontal_text(lab, len(area) - 1)
     if area[horiz].sum() < 0.5 * area[1:].sum():                 # строки рядом с тодо бичиг (афиша, вывеска);
         keep &= ~horiz                                            # а страницу, где их большинство, не трогаем:
@@ -577,7 +616,7 @@ def split_page(img, pad=0.1, deskew=True, debug=False):
     for c in cols:
         if not c or sum(int(m.sum()) for _, m in c) < 8 * s * s:
             continue
-        im, box = render_column(c, gray, pad)
+        im, box = render_column(c, gray, pad, s)
         out.append(im); boxes.append(box)
     if debug:
         return out, dict(ink=ink, gray=gray, angle=angle, stroke=s, cuts=cuts, boxes=boxes)
