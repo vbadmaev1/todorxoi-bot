@@ -225,6 +225,28 @@ def solid_components(lab, ink, s):
     return solid
 
 
+def rule_lines(lab, s):
+    """Метки компонент — вертикальных линий: рамка страницы, её край, линейка между столбцами. Толщиной они со
+    штрих, и solid_components их не берёт, а модель читает такую линию как столбец «ozozoooo…». Линия длиннее
+    40 толщин, почти в каждой строке не шире 2 толщин и идёт ровно: середина строки отходит от плавной кривой
+    (парабола — на фото страница выгнута) меньше чем на толщину. Длинное слово жирного шрифта из одних узких
+    петель («бусы» oooo) тоже тонкое, но петли виляют: на синтетике у таких слов отход от 1.3 толщины, у рамки
+    — до 0.45."""
+    line = np.zeros(lab.max() + 1, bool)
+    for i, (sy, sx) in enumerate(ndi.find_objects(lab), 1):
+        if sy is None or sy.stop - sy.start < 40 * s:
+            continue
+        m = lab[sy, sx] == i
+        rows = m.any(1)
+        left = np.argmax(m, 1)[rows]
+        right = m.shape[1] - np.argmax(m[:, ::-1], 1)[rows]
+        if np.mean(right - left <= 2.2 * s) < 0.95:
+            continue
+        y, mid = np.flatnonzero(rows), (left + right) / 2
+        line[i] = np.abs(mid - np.polyval(np.polyfit(y, mid, 2), y)).max() <= s
+    return line
+
+
 # ---------------------------------------------------------------- наклон
 
 def _sharpness(ink_small, angle):
@@ -571,7 +593,7 @@ def split_page(img, pad=0.1, deskew=True, debug=False):
     lab, _ = ndi.label(ink, structure=_EIGHT)
     area = np.bincount(lab.ravel())
     s = text_stroke_width(ink, lab, area)
-    keep = (area >= speck_area(area[1:], s)) & ~solid_components(lab, ink, s)
+    keep = (area >= speck_area(area[1:], s)) & ~solid_components(lab, ink, s) & ~rule_lines(lab, s)
     horiz = horizontal_text(lab, len(area) - 1)
     if area[horiz].sum() < 0.5 * area[1:].sum():                 # строки рядом с тодо бичиг (афиша, вывеска);
         keep &= ~horiz                                            # а страницу, где их большинство, не трогаем:
