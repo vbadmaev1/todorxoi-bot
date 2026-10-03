@@ -811,6 +811,8 @@ async def _check_ocr(dp, bot, session, storage):
     from core.translit_todo import fix_misreads
     check(ocr.to_translit(fix_misreads("ᠯᡇᡎᡃᠠ ᡑᠠᠷᡃᠠ ᠨᡇᡐᡇᡎᡅᡅᠠ") + " " + _t2t("γaria")) == "luγā darā nutugiyin γaria",
           "долгота после согласной переносится за гласную (dar:a -> darā), -iia -> -iyin")
+    check(ocr.to_translit(fix_misreads(_t2t("bürotaln bosu bülēn bolǰi büli zorigiyn"))) == "borotala bosu bülēn bolǰi büli zorigiyn",
+          "конечная n после согласной -> a; o/ü после b по остальным гласным слова, при равенстве — как прочитано")
     _junk = _t2t("bi q ger-tü l ü dm-ni")
     check(ocr.to_translit(ocr.tidy(_junk)) == "bi ger tü ü ni",
           "«слова» без гласной (мусор от скобок, цифр, латиницы) убираются, короткие слова остаются")

@@ -448,13 +448,49 @@ _TODO_STRAY_LONG = re.compile(f"(?<=[{_TODO_CONSONANTS}])ᡃ")
 # раз. Модель путает конечную n с конечной a (у обеих хвост влево) и
 # читает nutugiyin как nutugiia.
 _TODO_IIA = re.compile(r"ᡅᡅᠠ(?![ᠠ-ᢪ])")
+# Конечная n после согласной — та же путаница n/a: borotaln вместо borotala.
+# В корпусе такого конца почти нет (l, γ, x, d, b, m, r, s: 0–22 раза против
+# тысяч с a), это мусор вроде töüyigittn. Кроме š (nemešn 40 против 2), y
+# (в рукописях yin сокращают до yn: zorigiyn), n (удвоенная nn — отдельная
+# ошибка), ng и w.
+_TODO_FINAL_N = re.compile(
+    "(?<=[%s])ᠨ(?![\u180b-\u180f\u1820-\u18aa])" % re.sub("[ᠨᠱᡕᡊᡖ]", "", _TODO_CONSONANTS)
+)
+
+# После круглых b и p в части шрифтов o и ü нарисованы одинаково, и модель
+# путает их: bürotaln вместо borotala. Выбираем по сингармонизму — по
+# остальным гласным слова (i нейтральна): задних больше — o, передних — ü.
+# По корпусу так верно в 99.5% случаев (45 980 против 215: заимствования
+# вроде rebolüce). Если других гласных поровну или нет (bolǰi, bolbo, büli),
+# оставляем то, что прочитала модель: в корпусе там o 15 301 раз, ü — 1 114,
+# так что выбор по умолчанию в любую сторону ломал бы частые слова.
+_TODO_ROUND_O_U = re.compile("[ᡋᡌ][\u180b-\u180f]?([ᡆᡉ])")
+_TODO_LETTER_RUN = re.compile("[\u180b-\u180f\u1820-\u18aa]+")
+
+
+def _round_vowel_harmony(match):
+    word = match.group()
+    spots = {m.start(1) for m in _TODO_ROUND_O_U.finditer(word)}
+    if not spots:
+        return word
+    rest = [ch for i, ch in enumerate(word) if i not in spots]
+    back = sum(ch in "ᠠᡆᡇ" for ch in rest)
+    front = sum(ch in "ᡄᡈᡉ" for ch in rest)
+    if back == front:
+        return word
+    vowel = "ᡆ" if back > front else "ᡉ"
+    return "".join(vowel if i in spots else ch for i, ch in enumerate(word))
 
 
 def fix_misreads(todo_text):
     """Ошибки чтения, которых в правильном тексте не бывает: долгота после
-    согласной (dar:a -> darā) и окончание -iia (nutugiia -> nutugiyin)."""
+    согласной (dar:a -> darā), окончание -iia (nutugiia -> nutugiyin),
+    конечная n после согласной (borotaln -> borotala), o/ü после b и p
+    против сингармонизма (bürotala -> borotala)."""
     text = _TODO_LONG_AFTER_CONSONANT.sub(r"\1ᡃ", todo_text)
-    return _TODO_IIA.sub("ᡅᡕᡅᠨ", _TODO_STRAY_LONG.sub("", text))
+    text = _TODO_IIA.sub("ᡅᡕᡅᠨ", _TODO_STRAY_LONG.sub("", text))
+    text = _TODO_FINAL_N.sub("ᠠ", text)
+    return _TODO_LETTER_RUN.sub(_round_vowel_harmony, text)
 
 
 def normalize_ocr(todo_text):
