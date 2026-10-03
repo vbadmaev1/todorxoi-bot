@@ -35,6 +35,8 @@ page_layout.py — разметка страницы с вертикальным
 против 0.110% у split_columns) и на «Калмыцких сказках» Позднеева (1889):
 там split_columns находил один столбец на страницу, split_page — все 15.
 """
+import math
+
 import numpy as np
 from PIL import Image
 from scipy import ndimage as ndi
@@ -224,6 +226,20 @@ def solid_components(lab, ink, s):
         filled = mean_run[i] >= 0.5 * w
         if not (edge or wide or filled):
             solid[i] = False
+    # Скан разворота: чёрный фон сканера сверху и снизу, корешок и обрез книги (стопка тонких линий —
+    # краёв листов) срастаются в одну рамку вокруг всего кадра. Отрезков у неё много коротких (линии
+    # обреза), и средний выходит меньше 5 толщин — пятном она не считалась, страница резалась на
+    # «столбцы» во всю высоту, а одна из страниц разворота пропадала целиком. Компонента от края кадра
+    # больше чем на 0.6 его высоты и ширины сразу и больше 25 толщин штриха в обе стороны — не буква и не
+    # слово. Без последнего условия на картинке одного столбца (строка рукописи шириной 50 px) под правило
+    # попадало длинное слово, касающееся края.
+    for i, (sy, sx) in enumerate(objs, 1):
+        if sy is None or solid[i]:
+            continue
+        h, w = sy.stop - sy.start, sx.stop - sx.start
+        edge = sy.start == 0 or sx.start == 0 or sy.stop == H or sx.stop == W
+        if edge and h >= 0.6 * H and w >= 0.6 * W and min(h, w) >= 25 * s:
+            solid[i] = True
     return solid
 
 
@@ -643,6 +659,8 @@ def find_plates(img, max_plates=6):
             if not 0.01 * closed.sum() <= ha.sum() <= 0.5 * closed.sum():
                 continue
             ys, xs = np.nonzero((ha >= max(4, 0.02 * ha.max()))[hl])   # крошки не раздвигают рамку
+            if not len(ys):                                           # одни крошки — надписи нет
+                continue
             found.append((int(ha.sum()), sl, closed, (ys.min(), ys.max() + 1, xs.min(), xs.max() + 1)))
     arr = np.asarray(rgb)
     out = []
@@ -717,6 +735,77 @@ def split_page(img, pad=0.1, deskew=True, debug=False):
         keep &= ~horiz                                            # а страницу, где их большинство, не трогаем:
                                                                   # из обрывков русской страницы модель склеит мусор
     ink = keep[lab] & ink                                         # пылинки и сплошные пятна
+    halves = _spread_halves(ink, s) if deskew else None
+    if halves is not None:
+        # Разворот, страницы которого наклонены по-разному: каждую выпрямляем и режем отдельно, рамки
+        # столбцов возвращаем в координаты присланного кадра (угол для рамок — 0).
+        H = ink.shape[0]
+        out, boxes = [], []
+        for x0, x1 in halves:
+            o, b, a, _, _, g = _columns(ink[:, x0:x1], gray[:, x0:x1], s, pad, deskew)
+            out += o
+            boxes += [_unrotate_box(box, a, g.shape, (H, x1 - x0), x0) for box in b]
+        if debug:
+            return out, dict(ink=ink, gray=gray, angle=0.0, stroke=s, cuts=[halves[0][1]], boxes=boxes)
+        return out
+    out, boxes, angle, cuts, ink, gray = _columns(ink, gray, s, pad, deskew)
+    if debug:
+        return out, dict(ink=ink, gray=gray, angle=angle, stroke=s, cuts=cuts, boxes=boxes)
+    return out
+
+
+# Разница углов страниц разворота, с которой их выпрямляем по отдельности. По половине кадра угол оценивается
+# грубее: при пороге 0.5° две страницы из 10 стали чуть хуже, при 1° — ни одна (лучше — 2: доля слов корпуса
+# 0.51 -> 0.64 и 0.63 -> 0.67).
+SPREAD_SKEW_DIFF = 1.0
+
+
+def _spread_halves(ink, s):
+    """Разворот книги -> [(0, x), (x, W)] — две страницы, если их стоит выпрямлять по отдельности, иначе None.
+
+    На скане или фото разворота страницы лежат под разными углами (книга не раскрывается плоско): на
+    10 разворотах синьцзянской книги разница до 2.4°. Один угол на весь кадр выпрямлял одну страницу и
+    оставлял косой другую — её столбцы резались наискось, и текст портился. Корешок — самая широкая пустая
+    вертикальная полоса в средней части кадра (33–136 px на 1650), по обе стороны — заметная доля текста.
+    Режем, только если углы половин расходятся на SPREAD_SKEW_DIFF: обычная страница остаётся как была."""
+    H, W = ink.shape
+    occupied = ink.sum(0) > s
+    d = np.diff(np.concatenate([[1], occupied.astype(np.int8), [1]]))
+    starts, ends = np.flatnonzero(d == -1), np.flatnonzero(d == 1)
+    best = None
+    for a, b in zip(starts, ends):
+        if 0.3 * W <= (a + b) / 2 <= 0.7 * W and b - a >= max(8 * s, 0.015 * W) and (best is None or b - a > best[1] - best[0]):
+            best = (a, b)
+    if best is None:
+        return None
+    x = (best[0] + best[1]) // 2
+    total = ink.sum()
+    if min(ink[:, :x].sum(), ink[:, x:].sum()) < 0.2 * total:
+        return None
+    if abs(float(estimate_skew(ink[:, :x])) - float(estimate_skew(ink[:, x:]))) < SPREAD_SKEW_DIFF:
+        return None
+    return [(0, x), (x, W)]
+
+
+def _unrotate_box(box, angle, rotated_shape, shape, dx):
+    """Рамка (x0, y0, x1, y1) на картинке, повёрнутой на angle с expand, -> рамка на исходной (+ сдвиг dx)."""
+    if not angle:
+        x0, y0, x1, y1 = box
+        return (x0 + dx, y0, x1 + dx, y1)
+    rh, rw = rotated_shape
+    h, w = shape
+    t = math.radians(angle)
+    c, s_ = math.cos(t), math.sin(t)
+    pts = []
+    for x in (box[0], box[2]):
+        for y in (box[1], box[3]):
+            u, v = x - rw / 2, y - rh / 2
+            pts.append((u * c - v * s_ + w / 2, u * s_ + v * c + h / 2))
+    return (min(p[0] for p in pts) + dx, min(p[1] for p in pts), max(p[0] for p in pts) + dx, max(p[1] for p in pts))
+
+
+def _columns(ink, gray, s, pad, deskew):
+    """Чистые чернила и серая страница -> (столбцы, рамки, угол, границы, ink и gray после выпрямления)."""
     angle = 0.0                                                   # на сколько повернули на самом деле
     if deskew:
         estimate = float(estimate_skew(ink))
@@ -736,6 +825,4 @@ def split_page(img, pad=0.1, deskew=True, debug=False):
             continue
         im, box = render_column(c, gray, pad, s)
         out.append(im); boxes.append(box)
-    if debug:
-        return out, dict(ink=ink, gray=gray, angle=angle, stroke=s, cuts=cuts, boxes=boxes)
-    return out
+    return out, boxes, angle, cuts, ink, gray

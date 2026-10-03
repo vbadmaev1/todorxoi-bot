@@ -843,6 +843,16 @@ async def _check_ocr(dp, bot, session, storage):
     rare = _t2t("dobuyin-ni kele-bēr")
     check(ocr.to_translit(join_broken_words(rare, _tight(rare))) == "dobuyin ni kele bēr",
           "редкая основа перед частым суффиксом не склеивается и без просвета")
+    longs = _t2t("baqta-:qsan tālarxa-:d")
+    check(ocr.to_translit(join_broken_words(longs)) == "baqtāqsan tālarxād",
+          "пробел перед знаком долготы убирается всегда: baqta :qsan -> baqtāqsan")
+    faint = _t2t("kü-ndüdkel dömü-rgeǰi dobuyin-ni kele-bēr")
+    check(ocr.to_translit(join_broken_words(faint, [False] * len(faint))) == "kündüdkel dömürgeǰi dobuyin ni kele bēr",
+          "узкий пробел с просветом (бледный штрих на мелком скане) склеивается с бóльшим запасом языковой модели")
+    check(ocr.to_translit(fix_misreads(_t2t("barixu büii?"))) == "barixu büi?", "«?!», прочитанное как i: büii? -> büi?")
+    check(ocr._junk_column("ᠷᡆᡆᡏᠯ ᡆᡆ", [0.5, 0.7, 0.6, 0.9, 0.4, 0.3, 0.6, 0.7])
+          and not ocr._junk_column("ᠷᡆᡆᡏᠯ ᡆᡆ", [0.99, 0.7, 0.6, 0.99, 0.95, 1.0, 0.98, 0.97]),
+          "столбец, где модель почти ни в чём не уверена (край книги, корешок, размытое), отбрасывается")
 
     # Цвет: раньше картинка переводилась в серое, а фоном считалось «то, что
     # темнее 128 по краю». Жёлтое на оранжевом давало ореолы вместо букв,
