@@ -77,6 +77,17 @@ JUNK_UNSURE_SHARE = 0.5
 # Отброшенный столбец, в котором модель прочитала столько букв (и он размером как соседние), — размытый
 # текст: о нём говорим в ответе. Пустое место с просвечивающей обратной стороной даёт до 6 «букв».
 UNREADABLE_MIN_LETTERS = 7
+# Повёрнутое прочтение берём, если в нём уверенно прочитано в ROTATION_GAIN раз больше, чем в прямом, и
+# средняя уверенность не ниже ROTATED_MIN_CONFIDENCE. Пустотная рукопись: перевёрнутый лист 105 -> 427
+# (уверенность 0.83 -> 0.96), титульная строка поперёк кадра 0 -> 36 (0.89); мусор в повороте — до 0.83.
+ROTATION_GAIN = 1.5
+ROTATED_MIN_CONFIDENCE = 0.85
+# Страницу перечитываем перевёрнутой, если её длинные столбцы вверх ногами читаются увереннее на столько
+# (см. _flip_gain): у прямых страниц разница от -0.04 и ниже, у перевёрнутых +0.09…+0.16.
+FLIP_GAIN = 0.05
+# Прочитано меньше стольких букв — пробуем и повороты на бок: страница на боку даёт горстку «букв» с обычной
+# уверенностью (3 буквы, 0.94), а не пустоту.
+FEW_LETTERS = 10
 # С вырезки на фото предмета меньше букв не принимаем: после обрезки
 # неуверенного от складок и узоров остаются уверенные огрызки в 1–2 буквы
 # («xa» с кирпичной стены), а настоящая надпись — хотя бы слово.
@@ -379,6 +390,35 @@ def _unreadable_boxes(todo: list, boxes: list, keep: list) -> list:
     return out
 
 
+def _flip_gain(model, cols: list) -> float:
+    """Насколько модель увереннее читает самые длинные столбцы, перевернув их на 180° (> 0 — страница,
+    похоже, вверх ногами). Перевёрнутая страница — те же столбцы, только каждый вверх ногами и в обратном
+    порядке, так что хватает четырёх столбцов вместо второго прочтения всей страницы. Настоящие строки
+    рукописей: всегда < -0.04; разворот книги — от -0.04 до -0.15; лист пустотной рукописи вверх ногами +0.16."""
+    big = sorted(cols, key=lambda c: -c.height)[:4]
+    if not big:
+        return 0.0
+    _, _, up = model.read(big, char_probs=True)
+    _, _, down = model.read([c.rotate(180) for c in big], char_probs=True)
+    up, down = [q for p in up for q in p], [q for p in down for q in p]
+    return float(np.mean(down)) - float(np.mean(up)) if up and down else 0.0
+
+
+def _margin_columns(boxes: list) -> list:
+    """Для каждого столбца: True, если это колонтитул или номер страницы — короткий (ниже двух толщин
+    столбца) и целиком ниже или выше всех нормальных столбцов. Цифры номера стоят врозь и дают по
+    «столбцу» на цифру: «119» читалось как «bomi du». Короткий последний столбец стихотворения стоит
+    в одном ряду с остальными — его не трогаем."""
+    if len(boxes) < 3:
+        return [False] * len(boxes)
+    w = float(np.median([b[2] - b[0] for b in boxes]))
+    tall = [b for b in boxes if b[3] - b[1] >= 2 * w]
+    if not tall:
+        return [False] * len(boxes)
+    top, bottom = min(b[1] for b in tall), max(b[3] for b in tall)
+    return [b[3] - b[1] < 2 * w and (b[1] >= bottom or b[3] <= top) for b in boxes]
+
+
 def _read_page(page, split_page, model, trim=False):
     """Картинка -> (столбцы тодо, уверенность, число букв, отладка разметки) или None, если столбцов нет.
     trim — надпись на предмете: неуверенные слова по краям и неуверенные столбцы убираются.
@@ -389,6 +429,9 @@ def _read_page(page, split_page, model, trim=False):
     todo, confidence, probs = model.read(cols, char_probs=True)
     keep = [not _junk_column(t, p) for t, p in zip(todo, probs)]
     dbg["unread"] = [] if trim else _unreadable_boxes(todo, dbg["boxes"], keep)
+    keep = [k and not m for k, m in zip(keep, _margin_columns(dbg["boxes"]))]
+    if not trim:
+        dbg["flip_gain"] = _flip_gain(model, [c for c, k in zip(cols, keep) if k])
     if not all(keep):
         todo = [t for t, k in zip(todo, keep) if k]
         probs = [p for p, k in zip(probs, keep) if k]
@@ -402,8 +445,26 @@ def _read_page(page, split_page, model, trim=False):
         left = [q for _, p, _ in kept for q in p]                  # уверенность — по тому, что осталось
         confidence = float(np.mean(left)) if left else 0.0
     todo = [tidy(c) for c in todo]
+    if not all(todo):                                             # от столбца ничего не осталось — и строки нет
+        dbg["boxes"] = [b for t, b in zip(todo, dbg["boxes"]) if t]
+        todo = [t for t in todo if t]
     letters = sum(ch not in _NOT_LETTERS for t in todo for ch in t)
     return todo, confidence, letters, dbg
+
+
+def _better_turn(r, best) -> bool:
+    """Повёрнутое прочтение r лучше прямого best: уверенно и прочитано заметно больше — или столько же,
+    но заметно увереннее (короткий текст вверх ногами: 0.92 -> 0.98 при тех же буквах)."""
+    if r is None or r[1] < ROTATED_MIN_CONFIDENCE or r[2] < FEW_LETTERS:   # пустой лист в любом повороте
+        return False                                                       # даёт 3–4 уверенные «буквы»
+    if best is None or _mass(r) > ROTATION_GAIN * _mass(best):
+        return True
+    return r[1] >= best[1] + 0.03 and _mass(r) >= 0.9 * _mass(best)
+
+
+def _mass(r) -> float:
+    """Сколько уверенно прочитано: число букв × средняя уверенность (для выбора поворота)."""
+    return 0.0 if r is None else r[2] * r[1]
 
 
 def _rank(r):
@@ -501,6 +562,20 @@ def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNC
     best = _read_page(img, split_page, model)
     plate_box = None
     steps["разметка и модель"] = (time.perf_counter() - t0) * 1000
+    poor = best is None or best[2] < FEW_LETTERS or best[1] < LOW_CONFIDENCE
+    if poor or best[3].get("flip_gain", 0.0) >= FLIP_GAIN:
+        # Фото или скан повёрнуты: у пустотной рукописи обороты листов сняты вверх ногами, титульная
+        # строка — поперёк кадра. Вверх ногами модель читает почти уверенно (0.92 на синтетике), поэтому
+        # переворот проверяется отдельно и дёшево — по самым длинным столбцам (flip_gain в _read_page); на
+        # бок повёрнутая страница читается плохо сама (почти без букв), и тогда пробуем все три поворота.
+        t0 = time.perf_counter()
+        upright = img
+        for rot in ((180, 90, 270) if poor else (180,)):
+            turned = upright.rotate(rot, expand=True)
+            r = _read_page(turned, split_page, model)
+            if _better_turn(r, best):
+                best, img = r, turned
+        steps["поворот"] = (time.perf_counter() - t0) * 1000
     if best is None or best[2] < MIN_LETTERS or best[1] < LOW_CONFIDENCE:
         # Не страница во весь кадр, а надпись на предмете (кулон, табличка) на пёстром фоне:
         # ищем табличку и читаем её отдельно; берём, что прочиталось лучше.

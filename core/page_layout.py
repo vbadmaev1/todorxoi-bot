@@ -685,6 +685,95 @@ def find_plates(img, max_plates=6):
     return out
 
 
+# Цифр в ряду нот, чтобы он считался рядом (см. score_notation): у песенника 11–24, у страницы песни из
+# нескольких столбцов коротких слов «ряды» по 8–9 пятен, строка темпа «1=♭B ♩=48» — 9.
+NOTE_ROW_DIGITS = 11
+
+
+def score_notation(lab, s, n=None):
+    """-> bool по меткам: нотная запись песенника (цифровая нотация, «1 2 3» с точками, дугами, скобками) и
+    слоги песни под нотами. Модель читает цифры и дуги как буквы, слоги под нотами стоят по одному-два
+    поперёк страницы, и разметка склеивала их со столбцами текста песни ниже. Слова песни целиком напечатаны
+    отдельным блоком под нотами — его и заголовок над нотами оставляем.
+
+    Нотный ряд — не меньше 8 пятен-«цифр» (высотой 3–9 толщин, не шире себя) в полосе высотой в цифру, от
+    края до края не уже 0.4 ширины кадра, и в полосе ±1.5 высоты цифры почти нет чернил высоких пятен (у
+    страницы тодо бичиг так выстраиваются части букв, но полоса режет столбцы слов: доля высоких 0.18–0.69,
+    у нот 0–0.14). Песенник — хотя бы два таких ряда из NOTE_ROW_DIGITS+ цифр (у нот их 11–24; страница песни из
+    нескольких столбцов коротких слов даёт «ряды» по 8–9 пятен). Зона нот — от 2 высот цифры над первым таким
+    рядом до 4.5 под последним; из неё уходит всё, кроме пятен, связанных цепочкой по вертикали (промежуток не больше
+    высоты цифры) с текстом вне зоны: последние слова столбцов с авторами, первые слова текста песни."""
+    n = int(lab.max()) if n is None else n                       # n — сколько меток (часть может быть обнулена)
+    objs = ndi.find_objects(lab, max_label=n)
+    out = np.zeros(n + 1, bool)
+    area = np.bincount(lab.ravel(), minlength=n + 1)
+    H, W = lab.shape
+    hh = np.zeros(n + 1, int)
+    box = np.zeros((n + 1, 4), int)
+    ys, xs, hs = [], [], []
+    for i, o in enumerate(objs, 1):
+        if o is None:
+            continue
+        sy, sx = o
+        h, w = sy.stop - sy.start, sx.stop - sx.start
+        hh[i] = h
+        box[i] = sy.start, sy.stop, sx.start, sx.stop
+        if area[i] >= 2 * s * s and 3 * s <= h <= 9 * s and 0.3 * h <= w <= 1.2 * h:
+            ys.append((sy.start + sy.stop) / 2); xs.append((sx.start + sx.stop) / 2); hs.append(h)
+    if len(ys) < 16:
+        return out
+    ys, xs = np.array(ys), np.array(xs)
+    hd = float(np.median(hs))
+    rows, used = [], np.zeros(len(ys), bool)
+    for k in np.argsort(ys):
+        if used[k]:
+            continue
+        sel = (np.abs(ys - ys[k]) <= 0.5 * hd) & ~used
+        yc = float(np.median(ys[sel]))
+        sel = (np.abs(ys - yc) <= 0.5 * hd) & ~used
+        used[k] = True
+        if sel.sum() < 8 or xs[sel].max() - xs[sel].min() < 0.4 * W:
+            continue
+        used |= sel
+        band = lab[max(0, int(yc - 1.5 * hd)):int(yc + 1.5 * hd) + 1]
+        inked = band > 0
+        if (hh[band] > 2.5 * hd)[inked].mean() <= 0.15:
+            rows.append((yc, int(sel.sum())))
+    strong = [yc for yc, k in rows if k >= NOTE_ROW_DIGITS]                   # строка темпа «1=♭B ♩=48» — слабый ряд,
+    # по ней границу не ведём: рядом заголовок. Ряды нот отстоят друг от друга на ~10 высот цифры; ряды ближе
+    # 5 — одна полоса (концы столбцов на одной высоте: последние буквы и точки выстраиваются в 2–3 «ряда»).
+    apart = [y for k, y in enumerate(sorted(strong)) if k == 0 or y - sorted(strong)[k - 1] >= 5 * hd]
+    if len(apart) < 2:
+        return out
+    # Вниз зона продолжается слабыми рядами, идущими следом (последняя строка нот бывает короткой — в 9
+    # цифр, — а под ней слоги и тактовая черта); вверх — нет: над нотами заголовок и авторы.
+    pitch = float(np.median(np.diff(sorted(strong))))
+    last = max(strong)
+    for yc, _ in sorted(rows):
+        if last < yc <= last + 1.5 * pitch:
+            last = yc
+    top, bottom = min(strong) - 2 * hd, last + 4.5 * hd
+    mid = (box[:, 0] + box[:, 1]) / 2
+    zone = (mid >= top) & (mid <= bottom)
+    zone[0] = False
+    # связанные по вертикали с текстом вне зоны — не трогаем (растим от пятен вне зоны)
+    keep = ~zone
+    keep[0] = False
+    changed = True
+    while changed:
+        changed = False
+        anchors = np.flatnonzero(keep)
+        for i in np.flatnonzero(zone & ~keep):
+            y0, y1, x0, x1 = box[i]
+            near = anchors[(box[anchors, 2] < x1) & (box[anchors, 3] > x0)
+                           & (box[anchors, 0] - y1 <= hd) & (y0 - box[anchors, 1] <= hd)]
+            if len(near):
+                keep[i] = True
+                changed = True
+    out[1:] = zone[1:] & ~keep[1:]
+    return out
+
+
 def horizontal_text(lab, n):
     """-> bool по меткам: компоненты, из которых сложены горизонтальные строки — кириллица, латиница, цифры
     на афише, вывеске, обложке рядом с надписью тодо бичиг. Такие строки давали свои пики в проекции,
@@ -730,7 +819,8 @@ def split_page(img, pad=0.1, deskew=True, debug=False):
     area = np.bincount(lab.ravel())
     s = text_stroke_width(ink, lab, area)
     keep = (area >= speck_area(area[1:], s)) & ~solid_components(lab, ink, s) & ~rule_lines(lab, s) & ~figures(lab, s)
-    horiz = horizontal_text(lab, len(area) - 1)
+    keep &= ~score_notation(np.where(keep[lab], lab, 0), s, len(area) - 1)   # ноты песенника (до строк: те
+    horiz = horizontal_text(lab, len(area) - 1)                                # забирают часть цифр из рядов)
     if area[horiz].sum() < 0.5 * area[1:].sum():                 # строки рядом с тодо бичиг (афиша, вывеска);
         keep &= ~horiz                                            # а страницу, где их большинство, не трогаем:
                                                                   # из обрывков русской страницы модель склеит мусор
