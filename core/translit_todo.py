@@ -448,6 +448,9 @@ _TODO_STRAY_LONG = re.compile(f"(?<=[{_TODO_CONSONANTS}])ᡃ")
 # раз. Модель путает конечную n с конечной a (у обеих хвост влево) и
 # читает nutugiyin как nutugiia.
 _TODO_IIA = re.compile(r"ᡅᡅᠠ(?![ᠠ-ᢪ])")
+# «?!» в конце строки стихотворения модель читает как i и один из знаков: büi?! -> büii?. Слов на -ii в
+# корпусе 22 формы на 1.3 млн употреблений (48 раз).
+_TODO_II_PUNCT = re.compile("ᡅᡅ(?=[︕︖])")
 # Конечная n после согласной — та же путаница n/a: borotaln вместо borotala.
 # В корпусе такого конца почти нет (l, γ, x, d, b, m, r, s: 0–22 раза против
 # тысяч с a), это мусор вроде töüyigittn. Кроме š (nemešn 40 против 2), y
@@ -489,7 +492,7 @@ def fix_misreads(todo_text):
     против сингармонизма (bürotala -> borotala)."""
     text = _TODO_LONG_AFTER_CONSONANT.sub(r"\1ᡃ", todo_text)
     text = _TODO_IIA.sub("ᡅᡕᡅᠨ", _TODO_STRAY_LONG.sub("", text))
-    text = _TODO_FINAL_N.sub("ᠠ", text)
+    text = _TODO_FINAL_N.sub("ᠠ", _TODO_II_PUNCT.sub("ᡅ", text))
     return _TODO_LETTER_RUN.sub(_round_vowel_harmony, text)
 
 
