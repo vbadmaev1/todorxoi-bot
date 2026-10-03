@@ -74,6 +74,9 @@ UNSURE_WORD = 0.9
 # размытые столбцы; на настоящих строках рукописей CER test не меняется.
 JUNK_MEAN = 0.8
 JUNK_UNSURE_SHARE = 0.5
+# Отброшенный столбец, в котором модель прочитала столько букв (и он размером как соседние), — размытый
+# текст: о нём говорим в ответе. Пустое место с просвечивающей обратной стороной даёт до 6 «букв».
+UNREADABLE_MIN_LETTERS = 7
 # С вырезки на фото предмета меньше букв не принимаем: после обрезки
 # неуверенного от складок и узоров остаются уверенные огрызки в 1–2 буквы
 # («xa» с кирпичной стены), а настоящая надпись — хотя бы слово.
@@ -82,6 +85,7 @@ PLATE_MIN_LETTERS = 3
 MIN_LETTERS = 2
 
 _BOX_COLORS = ((230, 40, 40), (30, 110, 235))   # соседние столбцы — разным цветом
+_UNREAD_COLOR = (130, 130, 130)                  # размытый столбец, которого нет в тексте
 
 _GAP = " ᠂᠃︱︖︕"                  # пробел и знаки препинания из алфавита модели
 _NOT_LETTERS = set(_GAP + "\u202f")
@@ -173,6 +177,7 @@ class OcrResult:
     angle: float = 0.0                     # на сколько градусов выпрямили
     elapsed_ms: float = 0.0
     steps_ms: dict = field(default_factory=dict)
+    unreadable: int = 0                    # столбцов с текстом, который не разобрать (размыт)
 
     @property
     def todo(self) -> str:
@@ -355,14 +360,35 @@ def _junk_column(text: str, probs: list) -> bool:
     return float(np.mean(p)) < JUNK_MEAN and float(np.mean(np.array(p) < UNSURE_WORD)) >= JUNK_UNSURE_SHARE
 
 
+def _unreadable_boxes(todo: list, boxes: list, keep: list) -> list:
+    """Рамки отброшенных столбцов, которые похожи на настоящие, но размытые: модель прочитала хотя бы
+    UNREADABLE_MIN_LETTERS букв, а толщиной и длиной столбец как соседние. Край книги, тень корешка и
+    номер страницы отличаются размером: во всю высоту, в несколько столбцов шириной или крошечные. На
+    10 разворотах книги так отмечаются ровно размытые столбцы у корешка и размытый заголовок."""
+    kept = [b for b, k in zip(boxes, keep) if k]
+    if len(kept) < 3:
+        return []
+    w = float(np.median([b[2] - b[0] for b in kept]))
+    h = max(b[3] - b[1] for b in kept)
+    out = []
+    for t, b, k in zip(todo, boxes, keep):
+        letters = sum(ch not in _NOT_LETTERS for ch in t)
+        if not k and letters >= UNREADABLE_MIN_LETTERS and 0.6 * w <= b[2] - b[0] <= 1.6 * w \
+                and 2 * w <= b[3] - b[1] <= 1.15 * h:
+            out.append(b)
+    return out
+
+
 def _read_page(page, split_page, model, trim=False):
     """Картинка -> (столбцы тодо, уверенность, число букв, отладка разметки) или None, если столбцов нет.
-    trim — надпись на предмете: неуверенные слова по краям и неуверенные столбцы убираются."""
+    trim — надпись на предмете: неуверенные слова по краям и неуверенные столбцы убираются.
+    В отладке «unread» — рамки размытых столбцов, которые пришлось выкинуть (см. _unreadable_boxes)."""
     cols, dbg = split_page(page, debug=True)
     if not cols:
         return None
     todo, confidence, probs = model.read(cols, char_probs=True)
     keep = [not _junk_column(t, p) for t, p in zip(todo, probs)]
+    dbg["unread"] = [] if trim else _unreadable_boxes(todo, dbg["boxes"], keep)
     if not all(keep):
         todo = [t for t, k in zip(todo, keep) if k]
         probs = [p for p, k in zip(probs, keep) if k]
@@ -427,8 +453,9 @@ def _font(size: int):
         return ImageFont.load_default()
 
 
-def draw_columns(page: Image.Image, boxes: list):
-    """Выпрямленная страница + рамки столбцов с номерами -> (JPEG, размер)."""
+def draw_columns(page: Image.Image, boxes: list, unread: list = ()):
+    """Выпрямленная страница + рамки столбцов с номерами -> (JPEG, размер).
+    unread — рамки размытых столбцов: серые, с «?» вместо номера (в тексте их нет)."""
     im = page.convert("RGB")
     k = min(1.0, OVERLAY_SIDE / max(im.size))
     if k < 1.0:
@@ -437,12 +464,12 @@ def draw_columns(page: Image.Image, boxes: list):
     line = max(2, round(max(im.size) / 500))
     widths = [(x1 - x0) * k for x0, _, x1, _ in boxes]
     font = _font(max(12, min(40, round((np.median(widths) if widths else 30) * 0.45))))
-    for n, (x0, y0, x1, y1) in enumerate(boxes, 1):
-        color = _BOX_COLORS[(n - 1) % 2]
+    marks = [(str(n), _BOX_COLORS[(n - 1) % 2], b) for n, b in enumerate(boxes, 1)]
+    marks += [("?", _UNREAD_COLOR, b) for b in unread]
+    for label, color, (x0, y0, x1, y1) in marks:
         box = [round(x0 * k), round(y0 * k), round(x1 * k), round(y1 * k)]
         box = [max(0, box[0]), max(0, box[1]), min(im.width - 1, box[2]), min(im.height - 1, box[3])]
         draw.rectangle(box, outline=color, width=line)
-        label = str(n)
         tw, th = draw.textbbox((0, 0), label, font=font)[2:]
         cx = (box[0] + box[2]) // 2
         ty = box[1] - th - 2 * line if box[1] - th - 2 * line >= 0 else box[1] + line
@@ -511,7 +538,8 @@ def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNC
     steps["кириллица"] = (time.perf_counter() - t0) * 1000
 
     res = OcrResult(columns=todo, translit_columns=translit, cyrillic_columns=cyrillic,
-                    confidence=confidence, angle=dbg["angle"], steps_ms=steps)
+                    confidence=confidence, angle=dbg["angle"], steps_ms=steps,
+                    unreadable=0 if plate_box is not None else len(dbg.get("unread", [])))
     if overlay:
         t0 = time.perf_counter()
         if plate_box is not None:
@@ -534,13 +562,13 @@ def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNC
         elif img.mode == "RGBA":
             # у прозрачной картинки цвет под прозрачностью случайный — показываем то, что видела модель
             page = Image.fromarray(dbg["gray"])
-            res.overlay, res.overlay_size = draw_columns(page, dbg["boxes"])
+            res.overlay, res.overlay_size = draw_columns(page, dbg["boxes"], dbg.get("unread", []))
         else:
             # рамки — на присланной картинке, в её цветах: так человек узнаёт своё фото
             page = img if not dbg["angle"] else img.rotate(
                 dbg["angle"], Image.BICUBIC, expand=True,
                 fillcolor=255 if img.mode == "L" else (255, 255, 255))
-            res.overlay, res.overlay_size = draw_columns(page, dbg["boxes"])
+            res.overlay, res.overlay_size = draw_columns(page, dbg["boxes"], dbg.get("unread", []))
         steps["рамки"] = (time.perf_counter() - t0) * 1000
     res.elapsed_ms = (time.perf_counter() - started) * 1000
     return res
