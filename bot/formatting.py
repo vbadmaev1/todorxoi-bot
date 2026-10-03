@@ -141,6 +141,17 @@ def _image_caption(
     return "\n\n".join(blocks)
 
 
+def columns_word(n: int) -> str:
+    """3 -> «3 столбца»: 1 столбец, 2–4 столбца, 5–20 столбцов, 21 столбец..."""
+    if n % 10 == 1 and n % 100 != 11:
+        word = "столбец"
+    elif 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        word = "столбца"
+    else:
+        word = "столбцов"
+    return f"{n} {word}"
+
+
 def render_ocr(res, show_time: bool = True) -> list:
     """Ответ на фото: кириллица, транслитерация и тодо бичиг, по строке на столбец.
 
@@ -153,6 +164,12 @@ def render_ocr(res, show_time: bool = True) -> list:
         blocks += _code_blocks(texts.LABEL_CYRILLIC, res.cyrillic_columns)
     blocks += _code_blocks(texts.LABEL_TRANSLIT, res.translit_columns)
     blocks += _code_blocks(texts.LABEL_TODO, res.columns)
+    if res.unreadable:
+        blocks.append(
+            texts.OCR_UNREADABLE.format(cols=columns_word(res.unreadable))
+            + (texts.OCR_UNREADABLE_OVERLAY if res.overlay else "")
+            + texts.OCR_UNREADABLE_HINT
+        )
     if res.low_confidence:
         blocks.append(texts.OCR_LOW_CONFIDENCE)
     if show_time:
