@@ -798,6 +798,29 @@ async def _check_ocr(dp, bot, session, storage):
           "в транслитерации бирги нет, четыре точки — точка")
     check(ocr.to_translit("ᡍᡄᠯᡄ\u202fᡋᡄᡃᠷ") == "kele bēr",
           "в транслитерации распознанного текста узкий пробел — пробел, не дефис")
+    from PIL import Image as _Image, ImageDraw as _Draw
+    for rot in (180, 90):
+        buf = io.BytesIO(); _Image.open(io.BytesIO(png)).rotate(rot, expand=True).save(buf, "PNG")
+        got = ocr.recognize(buf.getvalue(), overlay=False).todo.replace("\n", " ")
+        ratio = difflib.SequenceMatcher(None, sample.todo, got).ratio()
+        check(ratio > 0.95, f"фото, повёрнутое на {rot}°, читается после поворота ({ratio:.1%})")
+    # Песенник: над текстом песни ряды цифровых нот — они не должны попасть в текст
+    text_im = _Image.open(io.BytesIO(png)).convert("RGB")
+    digit_h = max(24, text_im.width // 40)
+    score = _Image.new("RGB", (text_im.width, digit_h * 12), "white")
+    d = _Draw.Draw(score)
+    for k in range(3):
+        y = digit_h + k * 4 * digit_h
+        for j, ch in enumerate("5536023235650613"):
+            d.text((digit_h // 2 + j * text_im.width // 17, y), ch, fill="black", font=ocr._font(digit_h))
+    song = _Image.new("RGB", (text_im.width, score.height + text_im.height), "white")
+    song.paste(score, (0, 0)); song.paste(text_im, (0, score.height))
+    buf = io.BytesIO(); song.save(buf, "PNG")
+    got = ocr.recognize(buf.getvalue(), overlay=False).todo.replace("\n", " ")
+    ratio = difflib.SequenceMatcher(None, sample.todo, got).ratio()
+    check(ratio > 0.95, f"страница песенника: ноты над текстом в текст не попадают ({ratio:.1%})")
+    check(ocr._margin_columns([(0, 0, 30, 400), (40, 0, 70, 380), (80, 0, 110, 420), (90, 600, 100, 620)])
+          == [False, False, False, True], "короткий «столбец» ниже всего текста (номер страницы) отбрасывается")
     check(len(framed.cyrillic_columns) == len(framed.columns) and framed.cyrillic.strip(),
           "распознанное фото: кириллица по строке на столбец")
     from core.broken_words import join_broken_words
