@@ -27,6 +27,7 @@ ocr.py — распознавание тодо бичиг с фото: карт�
 вдвое больше.
 """
 
+import functools
 import io
 import json
 import logging
@@ -576,6 +577,15 @@ def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNC
             if _better_turn(r, best):
                 best, img = r, turned
         steps["поворот"] = (time.perf_counter() - t0) * 1000
+    if best is None or best[2] < FEW_LETTERS or best[1] < LOW_CONFIDENCE:
+        # Текст двух полярностей сразу (плакат, таблица: белое на синих ячейках и синее на светлых) —
+        # бинаризация по местному контрасту вместо одной полярности на весь кадр.
+        t0 = time.perf_counter()
+        # Плакат пёстрый (рамки, фото, кириллица), как надпись на предмете: неуверенное по краям столбцов срезаем.
+        r = _read_page(img, functools.partial(split_page, local=True), model, trim=True)
+        if _better_turn(r, best):
+            best = r
+        steps["местный контраст"] = (time.perf_counter() - t0) * 1000
     if best is None or best[2] < MIN_LETTERS or best[1] < LOW_CONFIDENCE:
         # Не страница во весь кадр, а надпись на предмете (кулон, табличка) на пёстром фоне:
         # ищем табличку и читаем её отдельно; берём, что прочиталось лучше.

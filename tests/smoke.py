@@ -821,6 +821,20 @@ async def _check_ocr(dp, bot, session, storage):
     check(ratio > 0.95, f"страница песенника: ноты над текстом в текст не попадают ({ratio:.1%})")
     check(ocr._margin_columns([(0, 0, 30, 400), (40, 0, 70, 380), (80, 0, 110, 420), (90, 600, 100, 620)])
           == [False, False, False, True], "короткий «столбец» ниже всего текста (номер страницы) отбрасывается")
+    # Плакат: слева белый текст на синем, справа синий на светлом — одна полярность на весь кадр читала половину
+    import numpy as np
+    _a, _b = core.process("Һурвн сарин сар", "image"), core.process("хойр жилин эргцд", "image")
+    _A = np.asarray(_Image.open(_a.pages[0][0]).convert("L"), dtype=float) / 255
+    _B = np.asarray(_Image.open(_b.pages[0][0]).convert("L"), dtype=float) / 255
+    _h = max(_A.shape[0], _B.shape[0])
+    _A, _B = (np.pad(X, ((0, _h - X.shape[0]), (0, 0)), constant_values=1) for X in (_A, _B))
+    _blue, _light = np.array([60, 90, 200.]), np.array([225, 230, 245.])
+    _poster = np.concatenate([(1 - _A)[..., None] * 255 + _A[..., None] * _blue,
+                              _B[..., None] * _light + (1 - _B)[..., None] * _blue], 1).astype(np.uint8)
+    buf = io.BytesIO(); _Image.fromarray(_poster).save(buf, "PNG")
+    got = ocr.recognize(buf.getvalue(), overlay=False).todo.replace("\n", " ")
+    ratio = difflib.SequenceMatcher(None, _a.todo + " " + _b.todo, got).ratio()
+    check(ratio > 0.9, f"плакат с текстом двух полярностей читается целиком ({ratio:.1%})")
     check(len(framed.cyrillic_columns) == len(framed.columns) and framed.cyrillic.strip(),
           "распознанное фото: кириллица по строке на столбец")
     from core.broken_words import join_broken_words
