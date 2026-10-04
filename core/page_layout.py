@@ -152,8 +152,38 @@ def _text_is_light(g):
     return np.count_nonzero(light) < 0.5 * light.size
 
 
-def binarize(img):
-    """-> (чернила bool (H, W), серое uint8 с белым фоном и тёмным текстом)."""
+def local_binarize(img):
+    """-> (чернила, серое с белым фоном и тёмным текстом) по местному контрасту: чернила — то, что сильно
+    отличается от фона вокруг, в любую сторону.
+
+    binarize выбирает полярность одну на весь кадр. На плакате, в таблице, на открытке текст бывает сразу и
+    белым на синих ячейках, и синим на светлых: при любой полярности ячейки другого цвета становились
+    сплошными «чернилами», срастались с сеткой таблицы и уходили как рисунок вместе со всем текстом внутри —
+    со всего плаката читалось одно слово. Фон — медиана по окну крупнее штриха (на уменьшенной копии), порог —
+    Оцу по модулю разницы, не меньше 30. Линии таблицы (длиннее четверти кадра) снимаются."""
+    rgb = np.asarray(img.convert("RGB"), dtype=np.float32)
+    g = rgb @ np.array([0.299, 0.587, 0.114], np.float32)
+    H, W = g.shape
+    k = max(1, round(max(H, W) / 500))
+    small = g[::k, ::k]
+    bg = ndi.median_filter(small, size=max(9, round(max(small.shape) / 30)) | 1)   # окно ~1/30 кадра: уже —
+    bg = np.asarray(Image.fromarray(bg).resize((W, H), Image.BILINEAR))          # жирные штрихи считаются фоном
+    a = np.abs(g - bg)
+    ink = a > max(30, _otsu(np.clip(a, 0, 255).astype(np.uint8)))
+    top = float(np.percentile(a[ink], 90)) if ink.any() else 1.0
+    gray = np.clip(255 - a * (255 / max(1.0, top)), 0, 255).astype(np.uint8)
+    lines = ndi.binary_opening(ink, structure=np.ones((1, max(25, W // 6)), bool)) \
+        | ndi.binary_opening(ink, structure=np.ones((max(25, H // 4), 1), bool))
+    ink &= ~ndi.binary_dilation(lines)
+    gray[lines] = 255
+    return ink, gray
+
+
+def binarize(img, local=False):
+    """-> (чернила bool (H, W), серое uint8 с белым фоном и тёмным текстом).
+    local — по местному контрасту (текст двух полярностей сразу, см. local_binarize)."""
+    if local:
+        return local_binarize(img)
     g = to_gray(img)
     sample = g[::5, ::5]
     if np.count_nonzero((sample > 40) & (sample < 215)) < 0.01 * sample.size:
@@ -812,9 +842,10 @@ def horizontal_text(lab, n):
                 out[comps] = True
     return out
 
-def split_page(img, pad=0.1, deskew=True, debug=False):
-    """Страница (PIL) -> [столбец PIL ...] слева направо. debug=True -> (столбцы, словарь с промежуточными данными)."""
-    ink, gray = binarize(img)
+def split_page(img, pad=0.1, deskew=True, debug=False, local=False):
+    """Страница (PIL) -> [столбец PIL ...] слева направо. debug=True -> (столбцы, словарь с промежуточными данными).
+    local — бинаризация по местному контрасту (см. local_binarize)."""
+    ink, gray = binarize(img, local)
     lab, _ = ndi.label(ink, structure=_EIGHT)
     area = np.bincount(lab.ravel())
     s = text_stroke_width(ink, lab, area)
