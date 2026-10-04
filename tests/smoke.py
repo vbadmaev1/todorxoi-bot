@@ -796,6 +796,10 @@ async def _check_ocr(dp, bot, session, storage):
           "распознанное фото: бирга и четыре точки по настройке")
     check("\u1800" not in framed.translit and framed.translit.endswith("."),
           "в транслитерации бирги нет, четыре точки — точка")
+    # бирга в начале текста читается как «и» — отбрасывается, но только одиночная ᡅ перед пробелом
+    check(ocr.drop_leading_birga(["ᡅ ᠠᠯ", "ᡅ ᠠ"]) == ["ᠠᠯ", "ᡅ ᠠ"], "бирга: одиночная «и» в начале первого столбца снята")
+    check(ocr.drop_leading_birga(["ᡅ\u1843 ᠠ"]) == ["ᡅ\u1843 ᠠ"] and ocr.drop_leading_birga(["ᡅᠠ"]) == ["ᡅᠠ"],
+          "бирга: долгое «ī» и слово на «и» не трогаются")
     check(ocr.to_translit("ᡍᡄᠯᡄ\u202fᡋᡄᡃᠷ") == "kele bēr",
           "в транслитерации распознанного текста узкий пробел — пробел, не дефис")
     from PIL import Image as _Image, ImageDraw as _Draw
