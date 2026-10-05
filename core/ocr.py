@@ -54,6 +54,12 @@ _DEFAULT_MODEL = _HERE.parent / "model" / "todo_ocr_int8.onnx"
 # Больше этого по длинной стороне картинка уменьшается: память разметки
 # растёт с площадью, а точность на сканах одинаковая от 1000 до 2700 px.
 MAX_SIDE = 2500
+# Потолок по числу пикселей, а не по размеру файла: одноцветный PNG на 8 МБ распаковывается в
+# сотни мегабайт. Проверяется по заголовку, до распаковки (check_image_size, open_image). 50 Мп —
+# это 8000×6000: хватает любой фотографии с телефона, а распаковка не уходит за ~150–200 МБ.
+MAX_IMAGE_PIXELS = 50_000_000
+_TOO_LARGE = ("Изображение имеет слишком большое разрешение. Уменьшите фото "
+              "(не больше 50 мегапикселей, например 8000×6000) и пришлите снова.")
 # Столбцов в сеть за один прогон: 2 — пик ~280 МБ на страницу, 8 — ~670 МБ
 # при той же скорости и точности.
 MAX_BATCH = 2
@@ -504,11 +510,31 @@ def warmup() -> dict:
 
 # ---------------------------------------------------------------- картинка
 
+def _check_pixels(im: Image.Image) -> None:
+    if im.width * im.height > MAX_IMAGE_PIXELS:
+        raise OcrError(_TOO_LARGE)
+
+
+def check_image_size(data: bytes) -> None:
+    """Дёшево, по одному заголовку: слишком большую картинку отсекает до очереди на чтение и
+    до распаковки. Не картинку — тоже OcrError, с понятным текстом."""
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            _check_pixels(im)
+    except OcrError:
+        raise
+    except Image.DecompressionBombError as exc:      # у Pillow свой потолок (~179 Мп), он срабатывает при open
+        raise OcrError(_TOO_LARGE) from exc
+    except Exception as exc:
+        raise OcrError("Не получилось открыть картинку. Пришлите фото или файл PNG/JPG.") from exc
+
+
 def open_image(data: bytes) -> Image.Image:
     """Байты -> картинка в цвете (L, RGB или RGBA). В серое её переводит
     page_layout.to_gray: там решается, какой цвет текст, а какой фон."""
     try:
         im = Image.open(io.BytesIO(data))
+        _check_pixels(im)                       # до draft и exif_transpose: они уже распаковывают
         # JPEG можно декодировать сразу уменьшенным — быстрее и меньше памяти
         im.draft("RGB", (MAX_SIDE, MAX_SIDE))
         im = ImageOps.exif_transpose(im)        # фото с телефона, присланное файлом, бывает повёрнуто через EXIF
@@ -516,6 +542,10 @@ def open_image(data: bytes) -> Image.Image:
             im = im.convert("RGBA")
         elif im.mode not in ("L", "RGB"):
             im = im.convert("RGB")
+    except OcrError:
+        raise
+    except Image.DecompressionBombError as exc:
+        raise OcrError(_TOO_LARGE) from exc
     except Exception as exc:
         raise OcrError("Не получилось открыть картинку. Пришлите фото или файл PNG/JPG.") from exc
     if max(im.size) > MAX_SIDE:

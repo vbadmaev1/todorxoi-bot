@@ -800,6 +800,15 @@ async def _check_ocr(dp, bot, session, storage):
     check(ocr.drop_leading_birga(["ᡅ ᠠᠯ", "ᡅ ᠠ"]) == ["ᠠᠯ", "ᡅ ᠠ"], "бирга: одиночная «и» в начале первого столбца снята")
     check(ocr.drop_leading_birga(["ᡅ\u1843 ᠠ"]) == ["ᡅ\u1843 ᠠ"] and ocr.drop_leading_birga(["ᡅᠠ"]) == ["ᡅᠠ"],
           "бирга: долгое «ī» и слово на «и» не трогаются")
+    # потолок по пикселям — по заголовку, до распаковки: маленький файл с огромным разрешением
+    huge = io.BytesIO()
+    Image.new("1", (8000, 8000)).save(huge, format="PNG")
+    try:
+        ocr.open_image(huge.getvalue())
+        rejected = False
+    except ocr.OcrError as exc:
+        rejected = "слишком большое разрешение" in str(exc)
+    check(len(huge.getvalue()) < 1024 * 1024 and rejected, "картинка в 64 Мп отклонена по заголовку, файл при этом маленький")
     check(ocr.to_translit("ᡍᡄᠯᡄ\u202fᡋᡄᡃᠷ") == "kele bēr",
           "в транслитерации распознанного текста узкий пробел — пробел, не дефис")
     from PIL import Image as _Image, ImageDraw as _Draw
