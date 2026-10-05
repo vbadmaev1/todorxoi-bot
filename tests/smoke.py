@@ -809,6 +809,25 @@ async def _check_ocr(dp, bot, session, storage):
     except ocr.OcrError as exc:
         rejected = "слишком большое разрешение" in str(exc)
     check(len(huge.getvalue()) < 1024 * 1024 and rejected, "картинка в 64 Мп отклонена по заголовку, файл при этом маленький")
+    # форматы: только PNG/JPEG/WebP (EPS при чтении зовёт Ghostscript, остальное — лишние разборщики)
+    def _opens(fmt):
+        b = io.BytesIO()
+        Image.new("RGB", (32, 32), "white").save(b, format=fmt)
+        try:
+            ocr.check_image_size(b.getvalue())
+            return True
+        except ocr.OcrError:
+            return False
+    check(all(_opens(f) for f in ("PNG", "JPEG", "WEBP")), "форматы PNG/JPEG/WebP проходят проверку")
+    check(not any(_opens(f) for f in ("BMP", "GIF", "TIFF", "ICO", "PPM", "PCX", "TGA", "SGI", "DDS")),
+          "остальные форматы (BMP, GIF, TIFF и др.) отклоняются по заголовку")
+    check_eps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 100 100\n%%EndComments\nshowpage\n"
+    try:
+        ocr.check_image_size(check_eps)
+        eps_rejected = False
+    except ocr.OcrError:
+        eps_rejected = True
+    check(eps_rejected, "EPS отклоняется до чтения (Ghostscript не вызывается)")
     check(ocr.to_translit("ᡍᡄᠯᡄ\u202fᡋᡄᡃᠷ") == "kele bēr",
           "в транслитерации распознанного текста узкий пробел — пробел, не дефис")
     from PIL import Image as _Image, ImageDraw as _Draw
