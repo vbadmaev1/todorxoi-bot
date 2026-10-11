@@ -369,6 +369,12 @@ async def main():
           f"в настройках доступны все шрифты: {FONTS}")
     check(translit_to_font("xalimaq") == "ХалимаЩ",
           f"правила дают запись для шрифта: {translit_to_font('xalimaq')}")
+    # долгое «a» на конце после согласного — один глиф «Ә» (крючок вправо),
+    # а не «а»+«Ьә»; после гласной и другие долгие гласные не меняются
+    check(translit_to_font("bag\u0101") == "БаГӘ",
+          f"конечное ā после согласного: {translit_to_font('bag\u0101')}")
+    check(translit_to_font("bag\u012b") == "БаГыьә" and translit_to_font("bag\u0113") == "БаГЭь",
+          "ī и ē на конце не тронуты")
     # запись у семейства общая, поэтому каждый шрифт должен нарисовать её
     for key in FONTS:
         r = core.process("хальмг", "image", ImageOptions(font=key))
