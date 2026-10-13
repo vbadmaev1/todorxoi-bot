@@ -807,6 +807,38 @@ async def _check_ocr(dp, bot, session, storage):
           "распознанное фото: бирга и четыре точки по настройке")
     check("\u1800" not in framed.translit and framed.translit.endswith("."),
           "в транслитерации бирги нет, четыре точки — точка")
+    # бирга в начале текста читается как «и» — отбрасывается, но только одиночная ᡅ перед пробелом
+    check(ocr.drop_leading_birga(["ᡅ ᠠᠯ", "ᡅ ᠠ"]) == ["ᠠᠯ", "ᡅ ᠠ"], "бирга: одиночная «и» в начале первого столбца снята")
+    check(ocr.drop_leading_birga(["ᡅ\u1843 ᠠ"]) == ["ᡅ\u1843 ᠠ"] and ocr.drop_leading_birga(["ᡅᠠ"]) == ["ᡅᠠ"],
+          "бирга: долгое «ī» и слово на «и» не трогаются")
+    # потолок по пикселям — по заголовку, до распаковки: маленький файл с огромным разрешением
+    huge = io.BytesIO()
+    Image.new("1", (8000, 8000)).save(huge, format="PNG")
+    try:
+        ocr.open_image(huge.getvalue())
+        rejected = False
+    except ocr.OcrError as exc:
+        rejected = "слишком большое разрешение" in str(exc)
+    check(len(huge.getvalue()) < 1024 * 1024 and rejected, "картинка в 64 Мп отклонена по заголовку, файл при этом маленький")
+    # форматы: только PNG/JPEG/WebP (EPS при чтении зовёт Ghostscript, остальное — лишние разборщики)
+    def _opens(fmt):
+        b = io.BytesIO()
+        Image.new("RGB", (32, 32), "white").save(b, format=fmt)
+        try:
+            ocr.check_image_size(b.getvalue())
+            return True
+        except ocr.OcrError:
+            return False
+    check(all(_opens(f) for f in ("PNG", "JPEG", "WEBP")), "форматы PNG/JPEG/WebP проходят проверку")
+    check(not any(_opens(f) for f in ("BMP", "GIF", "TIFF", "ICO", "PPM", "PCX", "TGA", "SGI", "DDS")),
+          "остальные форматы (BMP, GIF, TIFF и др.) отклоняются по заголовку")
+    check_eps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 100 100\n%%EndComments\nshowpage\n"
+    try:
+        ocr.check_image_size(check_eps)
+        eps_rejected = False
+    except ocr.OcrError:
+        eps_rejected = True
+    check(eps_rejected, "EPS отклоняется до чтения (Ghostscript не вызывается)")
     check(ocr.to_translit("ᡍᡄᠯᡄ\u202fᡋᡄᡃᠷ") == "kele bēr",
           "в транслитерации распознанного текста узкий пробел — пробел, не дефис")
     from PIL import Image as _Image, ImageDraw as _Draw
@@ -970,6 +1002,40 @@ async def _check_ocr(dp, bot, session, storage):
     await dp.feed_update(bot, Update(update_id=_next_id(), message=photo_message("ph2", buf.getvalue())))
     _, m = session.last("SendMessage")
     check("Не нашёл" in m.text or "Не разобрал" in m.text, "пустая картинка — понятная ошибка")
+
+
+    print("\nРусский текст в калмыцком боте")
+    from core import language_check
+
+    for phrase, kind in [
+        ("Как дела?", "russian"),
+        ("Моя семья в Элисте, сейчас я учусь в Москве", "russian"),
+        ("Александр", "name"),
+        ("Хальмг келн", "kalmyk"),
+        ("Мини нерн Бадм, би арвхн тавн настав", "kalmyk"),
+        ("Бадмин Үкрчә", "kalmyk"),
+        ("сяян хяяхч", "kalmyk"),
+    ]:
+        got = language_check.check(phrase).kind
+        check(got == kind, f"«{phrase}» -> {kind} (получилось {got})")
+
+    await dp.feed_update(bot, msg("/translit"))
+    await dp.feed_update(bot, msg("Привет, как дела?"))
+    _, m = session.last("SendMessage")
+    check("не на калмыцком языке" in m.text and "kergtya.org" in m.text and "@halmg_mt_bot" in m.text,
+          "русская фраза: в ответе предупреждение, сайт и @halmg_mt_bot")
+    check("privet" in m.text, "русская фраза читается правилами, а не калмыцкой моделью")
+    await dp.feed_update(bot, msg("Джамал"))
+    _, m = session.last("SendMessage")
+    check("ǰamal" in m.text, "Джамал -> ǰamal")
+    import core as _core
+    r = _core.process("Привет, как дела?", _core.TARGET_IMAGE, _core.ImageOptions(font="clear"))
+    check(r.font_switched and r.pages, "русский текст + шрифт Оргаева: картинка классическим шрифтом")
+    r = _core.process("хальмг келн", _core.TARGET_IMAGE, _core.ImageOptions(font="clear"))
+    check(not r.font_switched, "калмыцкий текст: шрифт Оргаева остаётся")
+    await dp.feed_update(bot, msg("Хальмг улс"))
+    _, m = session.last("SendMessage")
+    check("не на калмыцком языке" not in m.text, "калмыцкий текст: предупреждения нет")
 
 
 if __name__ == "__main__":

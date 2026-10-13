@@ -54,6 +54,16 @@ _DEFAULT_MODEL = _HERE.parent / "model" / "todo_ocr_int8.onnx"
 # Больше этого по длинной стороне картинка уменьшается: память разметки
 # растёт с площадью, а точность на сканах одинаковая от 1000 до 2700 px.
 MAX_SIDE = 2500
+# Потолок по числу пикселей, а не по размеру файла: одноцветный PNG на 8 МБ распаковывается в
+# сотни мегабайт. Проверяется по заголовку, до распаковки (check_image_size, open_image). 50 Мп —
+# это 8000×6000: хватает любой фотографии с телефона, а распаковка не уходит за ~150–200 МБ.
+MAX_IMAGE_PIXELS = 50_000_000
+# Форматы, которые вообще читаем. Pillow открывает больше десятка (EPS при чтении зовёт внешний
+# Ghostscript, TIFF/DDS/PCX/SGI тянут свои разборщики), а фото на деле бывают только такими.
+ALLOWED_FORMATS = ("PNG", "JPEG", "WEBP")
+_BAD_IMAGE = "Не получилось открыть картинку. Пришлите фото или файл JPG, PNG или WebP."
+_TOO_LARGE = ("Изображение имеет слишком большое разрешение. Уменьшите фото "
+              "(не больше 50 мегапикселей, например 8000×6000) и пришлите снова.")
 # Столбцов в сеть за один прогон: 2 — пик ~280 МБ на страницу, 8 — ~670 МБ
 # при той же скорости и точности.
 MAX_BATCH = 2
@@ -115,6 +125,22 @@ _LOOSE_NNBSP = re.compile(f"\u202f+(?=[{_GAP}]|$)|(?<=[{_GAP}])\u202f+|^\u202f+"
 _PUNCT_TO_LATIN = str.maketrans(
     {"᠂": ",", "᠃": ".", "︖": "?", "︕": "!", "︱": "—", "᠀": None, "᠅": "."}
 )
+
+
+# Бирга ᠀ (знак начала текста) и четыре точки ᠅ (конец) — в алфавите модели их нет: она видела
+# только , . | ? ! — и читает ближайшее знакомое. Бирга — завиток вверху первого столбца — читается
+# как буква ᡅ («и») с уверенностью 0.999, так что по уверенности её не поймать. Отдельное слово
+# «i» в корпусе встречается 4 раза на 1.3 млн слов (длинное «ī» — другое: оно с знаком долготы), так
+# что одиночная ᡅ перед пробелом в самом начале текста — это бирга, и она отбрасывается.
+_LEADING_BIRGA = re.compile("^\u1845(?=[ ])[ ]*")
+
+
+def drop_leading_birga(columns: list) -> list:
+    """Столбцы тодо -> те же столбцы без биргой прочитанной «и» в начале первого. Число столбцов не
+    меняется: по нему нумеруются рамки на картинке."""
+    if not columns:
+        return columns
+    return [_LEADING_BIRGA.sub("", columns[0])] + list(columns[1:])
 
 
 # Слово тодо бичиг без гласной — почти всегда не слово, а то, чего нет в
@@ -488,11 +514,31 @@ def warmup() -> dict:
 
 # ---------------------------------------------------------------- картинка
 
+def _check_pixels(im: Image.Image) -> None:
+    if im.width * im.height > MAX_IMAGE_PIXELS:
+        raise OcrError(_TOO_LARGE)
+
+
+def check_image_size(data: bytes) -> None:
+    """Дёшево, по одному заголовку: слишком большую картинку отсекает до очереди на чтение и
+    до распаковки. Не картинку — тоже OcrError, с понятным текстом."""
+    try:
+        with Image.open(io.BytesIO(data), formats=ALLOWED_FORMATS) as im:
+            _check_pixels(im)
+    except OcrError:
+        raise
+    except Image.DecompressionBombError as exc:      # у Pillow свой потолок (~179 Мп), он срабатывает при open
+        raise OcrError(_TOO_LARGE) from exc
+    except Exception as exc:
+        raise OcrError(_BAD_IMAGE) from exc
+
+
 def open_image(data: bytes) -> Image.Image:
     """Байты -> картинка в цвете (L, RGB или RGBA). В серое её переводит
     page_layout.to_gray: там решается, какой цвет текст, а какой фон."""
     try:
-        im = Image.open(io.BytesIO(data))
+        im = Image.open(io.BytesIO(data), formats=ALLOWED_FORMATS)
+        _check_pixels(im)                       # до draft и exif_transpose: они уже распаковывают
         # JPEG можно декодировать сразу уменьшенным — быстрее и меньше памяти
         im.draft("RGB", (MAX_SIDE, MAX_SIDE))
         im = ImageOps.exif_transpose(im)        # фото с телефона, присланное файлом, бывает повёрнуто через EXIF
@@ -500,8 +546,12 @@ def open_image(data: bytes) -> Image.Image:
             im = im.convert("RGBA")
         elif im.mode not in ("L", "RGB"):
             im = im.convert("RGB")
+    except OcrError:
+        raise
+    except Image.DecompressionBombError as exc:
+        raise OcrError(_TOO_LARGE) from exc
     except Exception as exc:
-        raise OcrError("Не получилось открыть картинку. Пришлите фото или файл PNG/JPG.") from exc
+        raise OcrError(_BAD_IMAGE) from exc
     if max(im.size) > MAX_SIDE:
         k = MAX_SIDE / max(im.size)
         im = im.resize((max(1, round(im.width * k)), max(1, round(im.height * k))), Image.LANCZOS)
@@ -610,6 +660,7 @@ def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNC
             "сверху вниз, а буквы крупные и чёткие."
         )
 
+    todo = drop_leading_birga(todo)
     t0 = time.perf_counter()
     # Страница размечена целиком — столбцы идут одним текстом: бирга перед
     # первым, четыре точки после последнего. Число строк не меняется, иначе
