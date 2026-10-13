@@ -1004,5 +1004,39 @@ async def _check_ocr(dp, bot, session, storage):
     check("Не нашёл" in m.text or "Не разобрал" in m.text, "пустая картинка — понятная ошибка")
 
 
+    print("\nРусский текст в калмыцком боте")
+    from core import language_check
+
+    for phrase, kind in [
+        ("Как дела?", "russian"),
+        ("Моя семья в Элисте, сейчас я учусь в Москве", "russian"),
+        ("Александр", "name"),
+        ("Хальмг келн", "kalmyk"),
+        ("Мини нерн Бадм, би арвхн тавн настав", "kalmyk"),
+        ("Бадмин Үкрчә", "kalmyk"),
+        ("сяян хяяхч", "kalmyk"),
+    ]:
+        got = language_check.check(phrase).kind
+        check(got == kind, f"«{phrase}» -> {kind} (получилось {got})")
+
+    await dp.feed_update(bot, msg("/translit"))
+    await dp.feed_update(bot, msg("Привет, как дела?"))
+    _, m = session.last("SendMessage")
+    check("не на калмыцком языке" in m.text and "kergtya.org" in m.text and "@halmg_mt_bot" in m.text,
+          "русская фраза: в ответе предупреждение, сайт и @halmg_mt_bot")
+    check("privet" in m.text, "русская фраза читается правилами, а не калмыцкой моделью")
+    await dp.feed_update(bot, msg("Джамал"))
+    _, m = session.last("SendMessage")
+    check("ǰamal" in m.text, "Джамал -> ǰamal")
+    import core as _core
+    r = _core.process("Привет, как дела?", _core.TARGET_IMAGE, _core.ImageOptions(font="clear"))
+    check(r.font_switched and r.pages, "русский текст + шрифт Оргаева: картинка классическим шрифтом")
+    r = _core.process("хальмг келн", _core.TARGET_IMAGE, _core.ImageOptions(font="clear"))
+    check(not r.font_switched, "калмыцкий текст: шрифт Оргаева остаётся")
+    await dp.feed_update(bot, msg("Хальмг улс"))
+    _, m = session.last("SendMessage")
+    check("не на калмыцком языке" not in m.text, "калмыцкий текст: предупреждения нет")
+
+
 if __name__ == "__main__":
     asyncio.run(main())

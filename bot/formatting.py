@@ -54,9 +54,9 @@ def render_result(res: Result, show_time: bool = True) -> str:
             )
         blocks.append(f"{texts.LABEL_TODO}\n<code>{escape(res.todo or '')}</code>")
 
-    note = letters_note(res)
-    if note:
-        blocks.append(note)
+    for note in (language_note(res), letters_note(res)):
+        if note:
+            blocks.append(note)
     if show_time:
         blocks.append(timing_line(res))
     return "\n\n".join(blocks)
@@ -78,6 +78,15 @@ def _render_fix(res: Result, show_time: bool = True) -> str:
 
 # сколько исправленных слов показывать, остальные — «и ещё N»
 LETTER_FIXES_SHOWN = 12
+
+
+def language_note(res: Result) -> str:
+    """Предупреждение, если текст похож на русский (см. core/language_check.py)."""
+    if res.language == "russian":
+        return texts.LANG_RUSSIAN_NOTE
+    if res.language == "name":
+        return texts.LANG_NAME_NOTE
+    return ""
 
 
 def letters_note(res: Result) -> str:
@@ -132,9 +141,11 @@ def _image_caption(
             blocks.append(texts.COLOR_FALLBACK_NOTE)
         if res.pages_dropped:
             blocks.append(texts.PAGES_DROPPED.format(n=res.pages_dropped))
-        note = letters_note(res)
-        if note:
-            blocks.append(note)
+        for note in (language_note(res), letters_note(res)):
+            if note:
+                blocks.append(note)
+        if res.font_switched:
+            blocks.append(texts.LANG_FONT_NOTE)
 
     if page == pages and show_time:
         blocks.append(timing_line(res))

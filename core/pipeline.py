@@ -14,6 +14,7 @@ pipeline.py — единая точка входа для бота: «дай т�
 пользователю не нужно ничего указывать руками.
 """
 
+import dataclasses
 import logging
 import os
 import time
@@ -128,7 +129,13 @@ class Result:
     # похож на набранный без ә ө ү һ җ ң ('' — не похож); letter_fixes —
     # что исправлено, если пользователь включил исправление в /settings.
     letters_flag: str = ""
+    # Похож ли текст на русский (core/language_check.py): "russian" — русская
+    # фраза, "name" — русское слово или имя, "" — калмыцкий или неясно.
+    language: str = ""
     letter_fixes: list = field(default_factory=list)
+    # картинку пришлось нарисовать классическим шрифтом: русский текст
+    # шрифты Оргаева (Clear Script) передают неверно
+    font_switched: bool = False
     # режим TARGET_FIX: исправленный текст
     fixed_text: Optional[str] = None
     elapsed_ms: float = 0.0
@@ -168,6 +175,15 @@ def _check_input(text: str) -> str:
 
 def _to_translit(text: str, script: str, res: Result, fix_letters: bool = False) -> str:
     """Приводит любой вход к транслитерации проекта."""
+    if script == SCRIPT_CYRILLIC and res.language:
+        # Русский текст или имя: калмыцкая модель тут только портит слова,
+        # читаем по буквам простыми правилами (core/ru_translit.py).
+        from .ru_translit import russian_to_translit
+
+        t0 = time.perf_counter()
+        out = russian_to_translit(text)
+        res.steps_ms["русские правила"] = (time.perf_counter() - t0) * 1000
+        return out
     if script == SCRIPT_TRANSLIT:
         return text
     if script == SCRIPT_TODO:
@@ -208,6 +224,20 @@ def _to_cyrillic(translit: str, res: Result) -> Optional[str]:
         out = None
     res.steps_ms["кириллица"] = (time.perf_counter() - t0) * 1000
     return out
+
+
+def _check_language(text: str, res: Result) -> str:
+    """Русский текст в калмыцком боте: не мешаем, но предупреждаем."""
+    from . import language_check
+
+    t0 = time.perf_counter()
+    try:
+        found = language_check.check(text)
+    except Exception:
+        log.exception("проверка языка не удалась")
+        return ""
+    res.steps_ms["язык"] = (time.perf_counter() - t0) * 1000
+    return found.kind if found.warn else ""
 
 
 def _check_letters(text: str, res: Result, fix: bool) -> str:
@@ -257,6 +287,8 @@ def process(
 
     res = Result(target=target, source_text=text, source_script=script)
     started = time.perf_counter()
+    if script == SCRIPT_CYRILLIC:
+        res.language = _check_language(text, res)
 
     if target == TARGET_TRANSLIT:
         res.translit = _to_translit(text, script, res, fix_letters)
@@ -294,6 +326,11 @@ def process(
         res.steps_ms["translit→тодо"] = (time.perf_counter() - t0) * 1000
 
     elif target == TARGET_IMAGE:
+        if res.language and opts.uses_rules:
+            # Шрифты Оргаева рисуют калмыцкую запись по правилам, на русских
+            # словах они ошибаются — берём классический юникодный.
+            opts = dataclasses.replace(opts, font=DEFAULT_FONT)
+            res.font_switched = True
         from .todo_image import (
             SHAPING_OK,
             ShapingUnavailable,
