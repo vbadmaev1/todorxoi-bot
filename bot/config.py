@@ -54,6 +54,13 @@ class Config:
     feedback_on_translit: bool = True
     font_size: int = 64
     max_column_height: int = 900
+    # мини-приложение «Джангар» (/jangar): https-адрес статической страницы research/jangar/web;
+    # пусто — команда отвечает, что приложение не подключено
+    jangar_url: str = ""
+    # кнопка «Джангар» вместо кнопки меню команд рядом с полем ввода
+    jangar_menu_button: bool = False
+    # порт веб-сервера мини-приложений (bot/webapp.py: /jangar/); 0 — не запускать
+    webapp_port: int = 8080
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -66,6 +73,9 @@ class Config:
             font_size=int(os.environ.get("FONT_SIZE", "64")),
             max_column_height=int(os.environ.get("MAX_COLUMN_HEIGHT", "900")),
             ocr_overlay=_bool("OCR_OVERLAY", True),
+            jangar_url=os.environ.get("JANGAR_URL", "").strip(),
+            jangar_menu_button=_bool("JANGAR_MENU_BUTTON", False),
+            webapp_port=int(os.environ.get("WEBAPP_PORT") or os.environ.get("PORT") or "8080"),
         )
         if os.environ.get("DATA_DIR"):
             cfg.data_dir = Path(os.environ["DATA_DIR"]).expanduser().resolve()
@@ -103,6 +113,9 @@ class Config:
             raise RuntimeError(f"Не найден чекпойнт модели: {self.model_path}")
         if not self.font_path.exists():
             raise RuntimeError(f"Не найден шрифт тодо бичиг: {self.font_path}")
+
+        if self.jangar_url and not self.jangar_url.startswith("https://"):
+            raise RuntimeError("JANGAR_URL должен начинаться с https:// — иначе Telegram не откроет мини-приложение.")
 
     def is_admin(self, user_id: int) -> bool:
         # пока ADMIN_IDS не заполнен, админских команд нет ни у кого —

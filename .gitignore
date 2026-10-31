@@ -12,6 +12,8 @@ __pycache__/
 
 # собранные данные бота: база, лог фидбэка, выгрузки
 data/
+# …но данные мини-приложения «Джангар» — часть репозитория (tools/build_jangar_webapp.py)
+!webapp/jangar/data/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm

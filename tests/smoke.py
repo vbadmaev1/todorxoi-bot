@@ -214,6 +214,18 @@ async def main():
     _, m = session.last("SendMessage")
     check("Как пользоваться" in m.text, "/help описывает логику")
 
+    # /jangar: без JANGAR_URL — «не подключено»; с адресом — кнопка мини-приложения, «/jangar 5» — сразу песнь
+    await dp.feed_update(bot, msg("/jangar"))
+    _, m = session.last("SendMessage")
+    check("не подключено" in m.text, "/jangar без JANGAR_URL: приложение не подключено")
+    config.jangar_url = "https://example.org/jangar/"
+    await dp.feed_update(bot, msg("/jangar 5"))
+    _, m = session.last("SendMessage")
+    btn = m.reply_markup.inline_keyboard[0][0] if m.reply_markup else None
+    check(btn is not None and btn.web_app is not None and btn.web_app.url == "https://example.org/jangar/?ch=5",
+          "/jangar 5: кнопка мини-приложения на пятую песнь")
+    config.jangar_url = ""
+
     await dp.feed_update(bot, msg("/mode"))
     _, m = session.last("SendMessage")
     check("Транслитерация" in m.text, "/mode показывает режим по умолчанию")

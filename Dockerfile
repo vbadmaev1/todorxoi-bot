@@ -12,6 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# веб-сервер мини-приложений (bot/webapp.py): /jangar/ — «Джангар», /healthz — проверка
+EXPOSE 8080
+
 # база и лог фидбэка живут в volume, иначе пропадут при пересборке образа
 VOLUME ["/data"]
 
