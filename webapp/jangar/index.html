@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Джангар — параллельное чтение</title>
+<!-- Telegram Mini App: снаружи Telegram скрипт ничего не делает (initData пустой), страница работает как обычно -->
+<script src="https://telegram.org/js/telegram-web-app.js?59"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Mongolian&family=PT+Serif:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f7f4ee; --panel:#fffdf8; --fg:#2a2620; --muted:#8a8172; --line:#e4ddd0;
+  --accent:#a4442b; --hl:#fbe3b4; --hl2:#f3d27e; --box:rgba(164,68,43,.22); --boxline:#a4442b;
+  --serif:'PT Serif',Georgia,serif; --sans:-apple-system,system-ui,'Segoe UI',sans-serif;
+  --mong:'Noto Sans Mongolian',serif; --fs:17px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){--bg:#1c1a17;--panel:#24211d;--fg:#ece5d8;--muted:#9a917f;--line:#3a352d;
+    --accent:#e08a6a;--hl:#4a3a1c;--hl2:#6b5222;--box:rgba(224,138,106,.25);--boxline:#e08a6a}
+}
+:root[data-theme="dark"]{--bg:#1c1a17;--panel:#24211d;--fg:#ece5d8;--muted:#9a917f;--line:#3a352d;
+  --accent:#e08a6a;--hl:#4a3a1c;--hl2:#6b5222;--box:rgba(224,138,106,.25);--boxline:#e08a6a}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.45 var(--sans);display:flex;flex-direction:column}
+header{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap;background:var(--panel)}
+header h1{font:700 17px var(--serif);margin:0 8px 0 0;white-space:nowrap}
+select,button{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
+button{cursor:pointer} button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+#chap{max-width:min(60vw,520px)}
+#tabs{display:none;gap:4px}
+.spacer{flex:1}
+main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) minmax(0,1fr);min-height:0}
+.pane{min-height:0;overflow:auto;border-right:1px solid var(--line);position:relative}
+.pane:last-child{border-right:0}
+.pane h2{font:700 13px var(--sans);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0;padding:8px 14px;
+  position:sticky;top:0;background:var(--bg);z-index:2;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+/* скан */
+#scan{display:flex;flex-direction:column;overflow:hidden}
+#scanbar{display:flex;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--line);font-size:13px;color:var(--muted)}
+#scanwrap{flex:1;overflow:auto;padding:10px;display:flex;justify-content:center;align-items:flex-start}
+#page{position:relative;max-width:100%;box-shadow:0 1px 6px rgba(0,0,0,.15);background:#fff;cursor:crosshair}
+#page img{display:block;max-width:100%;height:auto}
+#pimg:not([src]){display:none}
+.hb{position:absolute;background:var(--box);outline:2px solid var(--boxline);border-radius:2px;pointer-events:none}
+.hb.word{background:rgba(255,200,0,.45);outline-color:#d99a00}
+#noscan{padding:30px;color:var(--muted);text-align:center}
+/* текст */
+#xal,#ru{padding-bottom:40vh}
+.part-title{font:700 15px var(--serif);color:var(--accent);padding:14px 16px 2px}
+.stz{padding:6px 16px;border-bottom:1px dashed var(--line)}
+.ln{font:var(--fs)/1.55 var(--serif);padding:1px 6px;margin:0 -6px;border-radius:4px;cursor:pointer}
+.ln.noscan{color:var(--muted)}
+.ln.sel{background:var(--hl)}
+.ln .sl{display:none;font:12px/1.3 var(--sans);color:var(--muted);padding-left:14px}
+body.showscan .ln .sl{display:block}
+.w{border-radius:3px}
+.w:hover{background:var(--hl2)}
+.untr{margin:10px 16px;padding:6px 10px;border-left:3px solid var(--muted);color:var(--muted);font-size:13px}
+.rstz{padding:8px 16px;border-bottom:1px dashed var(--line);font:var(--fs)/1.5 var(--serif);cursor:pointer}
+.rstz.sel{background:var(--hl)}
+.rstz .tag{font:11px var(--sans);color:var(--muted)}
+.notes{padding:10px 16px;font-size:13px;color:var(--muted)}
+/* всплывающая карточка */
+#pop{position:fixed;z-index:20;display:none;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 6px 24px rgba(0,0,0,.25);padding:10px 12px;max-width:min(92vw,520px);max-height:60vh;overflow:auto}
+#pop .row{display:flex;gap:12px;align-items:flex-start}
+#pop .todo{writing-mode:vertical-lr;font:26px/1.5 var(--mong);max-height:40vh;overflow:hidden;white-space:pre-wrap;
+  border-right:1px solid var(--line);padding-right:10px;flex:none}
+#pop dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:14px}
+#pop dt{color:var(--muted);font-size:12px;padding-top:2px}
+#pop dd{margin:0}
+#pop .cyr{font:18px var(--serif)}
+#pop .lat{font:16px var(--serif);font-style:italic}
+#pop .dict{margin-top:8px;border-top:1px solid var(--line);padding-top:6px;font-size:14px}
+#pop .dict .hd{font:700 15px var(--serif)} #pop .dict .hd .lt{font-weight:400;font-style:italic;color:var(--muted)}
+#pop .dict .hdrow{display:flex;gap:10px;align-items:flex-start;margin-top:4px}
+#pop .dict .tm{font:18px/1.4 var(--mong);writing-mode:vertical-lr;flex:none;border-right:1px solid var(--line);padding-right:6px}
+#pop .dict ol{margin:3px 0 3px 1.2em;padding:0} #pop .dict li{margin:2px 0}
+#pop .dict .ex{font-size:13px;margin:2px 0 2px 8px} #pop .dict .ex b{font-weight:600}
+#pop .dict a{color:var(--accent);cursor:pointer}
+#pop .x{position:absolute;right:6px;top:2px;border:0;background:none;font-size:18px;color:var(--muted)}
+.hint{font-size:12px;color:var(--muted)}
+/* узкий экран: вкладки */
+@media (max-width: 900px){
+  #tabs{display:flex}
+  main{grid-template-columns:1fr}
+  #scan,#xalp,#rup{display:none;border-right:0}
+  body[data-tab="scan"] #scan{display:flex}
+  body[data-tab="xal"] #xalp, body[data-tab="ru"] #rup{display:block}
+  header h1{font-size:15px}
+  #chap{max-width:100%;flex:1 1 100%}
+}
+/* внутри Telegram: высота — видимая область Telegram, шапка компактнее, отступ под системную полосу */
+body.tg{height:var(--tg-viewport-stable-height,100vh)}
+body.tg header{padding:6px 10px;gap:6px}
+body.tg header h1{display:none}       /* название и так в шапке окна Telegram */
+body.tg #fminus, body.tg #fplus{padding:2px 7px}
+body.tg #xal, body.tg #ru{padding-bottom:calc(40vh + env(safe-area-inset-bottom))}
+</style>
+</head>
+<body data-tab="xal">
+<header>
+  <h1>Җаңһр · Джангар</h1>
+  <select id="chap" aria-label="Глава"></select>
+  <div id="tabs">
+    <button data-t="scan">Скан</button><button data-t="xal" class="on">Текст</button><button data-t="ru">Перевод</button>
+  </div>
+  <span class="spacer"></span>
+  <label class="hint"><input type="checkbox" id="showscan"> чтение скана</label>
+  <button id="fminus" title="Мельче">A−</button><button id="fplus" title="Крупнее">A+</button>
+</header>
+<main>
+  <section class="pane" id="scan">
+    <div id="scanbar"><button id="pprev">‹</button><span id="pinfo"></span><button id="pnext">›</button>
+      <span class="spacer"></span><span class="hint">тодо бичиг, изд. Н. Очирова</span></div>
+    <div id="scanwrap"><div id="page"><img id="pimg" alt="страница скана"></div></div>
+  </section>
+  <section class="pane" id="xalp"><h2>Хальмг келн <span class="hint" id="xinfo"></span></h2><div id="xal"></div></section>
+  <section class="pane" id="rup"><h2>Перевод С. Липкина</h2><div id="ru"></div></section>
+</main>
+<div id="pop"><button class="x" aria-label="Закрыть">×</button><div id="popc"></div></div>
+<script>
+// Данные: data/index.json, data/chNN.json, data/pages.json (готовит tools/build_web.py), картинки pages/pNNN.jpg.
+// Без сборки и зависимостей — так страницу можно открыть как Telegram WebApp или вставить на сайт.
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pad = (n, k) => String(n).padStart(k, '0');
+// --- Telegram Mini App ---------------------------------------------------------------------------
+// Внутри Telegram: цвета темы, на весь экран, кнопка «Назад» закрывает карточку слова или возвращает к тексту,
+// открытие сразу на песни/строке по start_param («c5» или «c5_l05-2-5» — точки в id строки заменены на «-»).
+const tg = window.Telegram && window.Telegram.WebApp;
+const inTg = !!(tg && tg.initData);
+const hexA = (hex, a) => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); if (!m) return null;
+  const n = parseInt(m[1], 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
+function applyTgTheme() {
+  const p = tg.themeParams || {}, r = document.documentElement.style;
+  const map = {'--bg': p.bg_color, '--panel': p.secondary_bg_color || p.bg_color, '--fg': p.text_color,
+               '--muted': p.hint_color, '--accent': p.button_color || p.link_color, '--line': p.section_separator_color || p.hint_color};
+  for (const [k, v] of Object.entries(map)) if (v) r.setProperty(k, v);
+  const acc = p.button_color || p.link_color;
+  if (acc) { r.setProperty('--hl', hexA(acc, .18)); r.setProperty('--hl2', hexA(acc, .32));
+             r.setProperty('--box', hexA(acc, .22)); r.setProperty('--boxline', acc); }
+  document.documentElement.dataset.theme = tg.colorScheme === 'dark' ? 'dark' : 'light';
+}
+if (inTg) {
+  tg.ready(); tg.expand();
+  try { tg.disableVerticalSwipes(); } catch (e) {}          // жест «вниз» не закрывает приложение при прокрутке
+  document.body.classList.add('tg');
+  applyTgTheme(); tg.onEvent('themeChanged', applyTgTheme);
+  tg.BackButton.onClick(() => { if (popOpen()) closePop(); else setTab('xal'); });
+}
+function startParam() {
+  // start_param: в initData (ссылка t.me/<бот>/<приложение>?startapp=…) или отдельным параметром запуска
+  const wv = window.Telegram && window.Telegram.WebView;
+  const sp = inTg && ((tg.initDataUnsafe && tg.initDataUnsafe.start_param) || (wv && wv.initParams && wv.initParams.tgWebAppStartParam));
+  const m = /^c(\d+)(?:_l([\w-]+))?$/.exec(sp || '');
+  return m ? {ch: +m[1], l: m[2] ? m[2].replace(/-/g, '.') : null} : null;
+}
+const popOpen = () => $('#pop').style.display === 'block';
+function updateBack() {
+  if (!inTg) return;
+  const narrow = innerWidth <= 900;
+  (popOpen() || (narrow && document.body.dataset.tab !== 'xal')) ? tg.BackButton.show() : tg.BackButton.hide();
+}
+function closePop() { $('#pop').style.display = 'none'; updateBack(); }
+
+let INDEX = [], PAGES = {}, CH = null;
+let lines = [];          // все строки главы подряд: {part, line, idx (в части), el}
+let curLine = null, curPage = null;
+let fs = 17;
+try { fs = +localStorage.getItem('jangar-fs') || 17; } catch (e) {}
+document.documentElement.style.setProperty('--fs', fs + 'px');
+
+async function getJSON(u) { const r = await fetch(u, {cache: 'no-cache'}); if (!r.ok) throw new Error(u + ' ' + r.status); return r.json(); }
+
+async function init() {
+  [INDEX, PAGES] = await Promise.all([getJSON('data/index.json'), getJSON('data/pages.json')]);
+  $('#chap').innerHTML = INDEX.map(c =>
+    `<option value="${c.id}">${c.id ? c.id + '. ' : ''}${esc(c.title_ru)}${c.book_pos ? ' — песнь ' + c.book_pos + ' у Очирова' : (c.id > 10 ? ' — нет в скане' : '')}</option>`).join('');
+  // откуда открыть: start_param Telegram, ?ch= из кнопки бота (/jangar 5), #ch=&l= ссылки на строку
+  const h = new URLSearchParams(location.hash.slice(1)), q = new URLSearchParams(location.search), sp = startParam();
+  const ch = sp ? sp.ch : +(h.get('ch') ?? q.get('ch') ?? 1);
+  await openChapter(ch, sp ? sp.l : (h.get('l') ?? q.get('l')));
+}
+
+async function openChapter(id, lineId) {
+  CH = await getJSON(`data/ch${pad(id, 2)}.json`);
+  $('#chap').value = id;
+  renderXal(); renderRu();
+  const meta = INDEX.find(c => c.id === id);
+  $('#xinfo').textContent = meta.pages ? `скан ${meta.pages[0]}–${meta.pages[1]}` : 'нет в издании Очирова';
+  $('#xalp').scrollTop = 0; $('#rup').scrollTop = 0;
+  const first = lineId ? lines.find(l => l.line.id === lineId) : lines.find(l => l.line.scan);
+  if (first) selectLine(first, !!lineId, false);
+  else showPage(null);
+}
+
+function renderXal() {
+  lines = [];
+  const out = [];
+  CH.parts.forEach((part, pi) => {
+    out.push(`<div class="part-title">${part.kind === 'intro' ? 'Зачин песни (= вступление)' : esc(part.title)}</div>`);
+    const stop = part.ru.translated_to;
+    let k = 0, cut = false;
+    for (const st of part.stanzas) {
+      out.push('<div class="stz">');
+      for (const ln of st.lines) {
+        const n = lines.length;
+        lines.push({part: pi, line: ln, idx: k++});
+        const ws = ln.w.map((w, wi) => `<span class="w" data-w="${wi}">${esc(w[0])}</span>`).join(' ');
+        out.push(`<div class="ln${ln.scan ? '' : ' noscan'}" data-n="${n}" id="L${ln.id}">${ws}` +
+                 (ln.s_lat ? `<span class="sl">${esc(ln.s_lat)}</span>` : '') + '</div>');
+        if (stop && ln.id === stop && !cut) { cut = true; out.push('</div><div class="untr">Дальше перевода на сайте нет.</div><div class="stz">'); }
+      }
+      out.push('</div>');
+    }
+  });
+  $('#xal').innerHTML = out.join('');
+  document.querySelectorAll('#xal .ln').forEach(el => lines[+el.dataset.n].el = el);
+}
+
+function renderRu() {
+  const out = [];
+  CH.parts.forEach((part, pi) => {
+    out.push(`<div class="part-title">${part.kind === 'intro' ? 'Вступление' : esc(part.ru.title)}</div>`);
+    part.ru.stanzas.forEach((s, si) => {
+      const tag = s.how === 'manual' ? 'по смыслу' : s.how === 'approx' ? 'приблизительно' : '';
+      out.push(`<div class="rstz" data-p="${pi}" data-s="${si}">${s.lines.map(esc).join('<br>')}` +
+               (tag ? `<div class="tag">${tag}</div>` : '') + '</div>');
+    });
+    if (part.ru.notes && part.ru.notes.length) out.push(`<div class="notes">${part.ru.notes.map(esc).join('<br>')}</div>`);
+  });
+  $('#ru').innerHTML = out.join('');
+}
+
+// строка -> строфы перевода, куда она входит (отрезки по id строк в своей части)
+function ruFor(l) {
+  const part = CH.parts[l.part];
+  const pos = id => lines.findIndex(x => x.part === l.part && x.line.id === id);
+  const me = lines.indexOf(l);
+  return part.ru.stanzas.map((s, si) => [si, s]).filter(([si, s]) => s.from && pos(s.from) <= me && me <= pos(s.to)).map(([si]) => si);
+}
+
+// прокрутка своей панели, без scrollIntoView: два плавных scrollIntoView в разных панелях сбивают друг друга
+function scrollPane(pane, el, behavior) {
+  const pr = pane.getBoundingClientRect(), er = el.getBoundingClientRect();
+  pane.scrollTo({top: pane.scrollTop + er.top - pr.top - pr.height / 3, behavior});
+}
+
+function selectLine(l, scrollText, smooth = true) {
+  if (inTg && curLine !== l) try { tg.HapticFeedback.selectionChanged(); } catch (e) {}
+  const behavior = smooth ? 'smooth' : 'auto';
+  if (curLine) curLine.el.classList.remove('sel');
+  curLine = l; l.el.classList.add('sel');
+  if (scrollText) scrollPane($('#xalp'), l.el, behavior);
+  history.replaceState(null, '', `#ch=${CH.id}&l=${l.line.id}`);
+  // перевод
+  document.querySelectorAll('.rstz.sel').forEach(e => e.classList.remove('sel'));
+  const hits = ruFor(l);
+  hits.forEach((si, k) => {
+    const e = document.querySelector(`.rstz[data-p="${l.part}"][data-s="${si}"]`);
+    if (e) { e.classList.add('sel'); if (!k) scrollPane($('#rup'), e, behavior); }
+  });
+  // скан
+  if (l.line.scan) showPage(l.line.scan[0][0], l.line.scan); else showPage(curPage, []);
+}
+
+function showPage(no, segs = [], wordSegs = []) {
+  const page = $('#page');
+  page.querySelectorAll('.hb').forEach(e => e.remove());
+  if (no == null || !PAGES[no]) {
+    $('#pimg').removeAttribute('src'); $('#pinfo').textContent = CH && CH.id > 10 ? 'этой песни нет в скане' : '';
+    return;
+  }
+  const P = PAGES[no];
+  if (curPage !== no) { $('#pimg').src = `pages/p${pad(no, 3)}.webp`; curPage = no; }
+  $('#pinfo').textContent = `скан ${no} · стр. ${P.book}`;
+  const add = (s, cls) => {
+    if (s[0] !== no) return;
+    const b = P.boxes[s[1]]; if (!b) return;
+    const [x0, y0, x1, y1] = b, h = y1 - y0;
+    const top = y0 + h * Math.max(0, s[2] - 0.01), bot = y0 + h * Math.min(1, s[3] + 0.01);
+    const d = document.createElement('div'); d.className = 'hb' + (cls ? ' ' + cls : '');
+    Object.assign(d.style, {left: x0 / P.w * 100 + '%', width: (x1 - x0) / P.w * 100 + '%',
+                            top: top / P.h * 100 + '%', height: (bot - top) / P.h * 100 + '%'});
+    page.appendChild(d);
+  };
+  segs.forEach(s => add(s));
+  wordSegs.forEach(s => add(s, 'word'));
+  const first = page.querySelector('.hb');
+  if (first && window.innerWidth > 900) {
+    const wrap = $('#scanwrap'), r = first.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+    if (r.top < wr.top || r.bottom > wr.bottom) wrap.scrollTop += r.top - wr.top - wr.height / 3;
+  }
+}
+
+// клик по скану -> строка, которая лежит в этом месте
+$('#page').addEventListener('click', e => {
+  if (curPage == null) return;
+  const P = PAGES[curPage], r = $('#pimg').getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width * P.w, y = (e.clientY - r.top) / r.height * P.h;
+  const col = P.boxes.findIndex(b => x >= b[0] - 4 && x <= b[2] + 4);
+  if (col < 0) return;
+  const f = (y - P.boxes[col][1]) / (P.boxes[col][3] - P.boxes[col][1]);
+  let best = null, bd = 1e9;
+  for (const l of lines) for (const s of (l.line.scan || [])) {
+    if (s[0] !== curPage || s[1] !== col) continue;
+    const d = f < s[2] ? s[2] - f : f > s[3] ? f - s[3] : 0;
+    if (d < bd) { bd = d; best = l; }
+  }
+  if (best) { selectLine(best, true); if (window.innerWidth <= 900) setTab('xal'); }
+});
+
+$('#pprev').onclick = () => { if (curPage > 3) showPage(curPage - 1); };
+$('#pnext').onclick = () => { if (curPage < 337) showPage(curPage + 1); };
+
+// клик по строке / слову, выделение текста
+$('#xal').addEventListener('click', e => {
+  const el = e.target.closest('.ln'); if (!el) return;
+  const l = lines[+el.dataset.n];
+  selectLine(l, false);
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed) return;           // выделение обработает selectionchange
+  const w = e.target.closest('.w');
+  if (w) showPop([[l, +w.dataset.w]], e.clientX, e.clientY);
+});
+$('#ru').addEventListener('click', e => {
+  const el = e.target.closest('.rstz'); if (!el) return;
+  const s = CH.parts[+el.dataset.p].ru.stanzas[+el.dataset.s];
+  const l = s.from && lines.find(x => x.part === +el.dataset.p && x.line.id === s.from);
+  if (l) selectLine(l, true);
+});
+
+let selTimer = null;
+document.addEventListener('selectionchange', () => {
+  clearTimeout(selTimer);
+  selTimer = setTimeout(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !$('#xal').contains(sel.anchorNode)) return;
+    const words = [];
+    document.querySelectorAll('#xal .w').forEach(w => {
+      if (sel.containsNode(w, true)) words.push([lines[+w.closest('.ln').dataset.n], +w.dataset.w]);
+    });
+    if (!words.length) return;
+    const r = sel.getRangeAt(0).getBoundingClientRect();
+    showPop(words, r.left, r.bottom);
+  }, 250);
+});
+
+function showPop(words, x, y) {
+  const W = words.map(([l, wi]) => l.line.w[wi]);
+  const cyr = W.map(w => w[0]).join(' ');
+  const best = W.map(w => w[5] || w[1]).join(' ');
+  const btodo = W.map(w => w[7] || w[2]).join(' ');
+  const l0 = words[0][0];
+  $('#popc').innerHTML = `<div class="row">
+      <div class="todo">${esc(btodo)}</div>
+      <dl>
+        <dt>кириллица</dt><dd class="cyr">${esc(cyr)}</dd>
+        <dt>латиница</dt><dd class="lat">${esc(best)}</dd>
+        ${l0.line.rus ? `<dt>подстрочник</dt><dd>${esc(l0.line.rus)}</dd>` : ''}
+      </dl></div><div class="dict" id="dict"></div>`;
+  if (words.length <= 2) showDict(W[0][0], words[0][0]);
+  const pop = $('#pop');
+  pop.style.display = 'block';
+  updateBack();
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  pop.style.left = Math.max(8, Math.min(x, innerWidth - pw - 8)) + 'px';
+  pop.style.top = (y + 12 + ph < innerHeight ? y + 12 : Math.max(8, y - ph - 12)) + 'px';
+  // подсветить слова в скане
+  const refs = words.map(([l, wi]) => l.line.wref && l.line.wref[wi]).filter(Boolean);
+  if (l0.line.scan) showPage(l0.line.scan[0][0], l0.line.scan, refs);
+}
+// Словарь языка эпоса Б. Х. Тодаевой (data/todaeva.json, грузится при первом обращении)
+let TD = null;
+async function todaeva() { if (!TD) { TD = await getJSON('data/todaeva.json'); TD.byId = {}; TD.entries.forEach(e => TD.byId[e.i] = e); } return TD; }
+// Глагольные окончания: глагол в словаре — заголовок на -х
+const VERB_END = /(гсн|сн|җ|җ|ад|әд|од|өд|в|х|тл|хла|хлә|дг|на|нә|ч|хд|хин|хнь|сн[ьи]?нь?)$/;
+// остаток после основы: глагольные суффиксы (основа глагола — заголовок без -х) и падежные окончания имён
+const VERB_SUF = /^(гсн|сн|җ|ад|әд|од|өд|в|тл|хла|хлә|хлӑ|дг|на|нә|ч|хд|х|хин|хнь|ла|лә|тн|ич|н|хм|мр|мар|мәр|гдв|лдв)(нь|н|ан|ән)?$/;
+const NOUN_SUF = /^(|н|нь|ин|иг|ыг|г|т|д|тан|тән|дан|дән|ас|әс|асн|әсн|ар|әр|арн|әрн|та|тә|тәһән|таһан|ла|лә|ч|ан|ән|ын|ни|иннь|инь|ига|мүд|муд|мудт)$/;
+const ruStems = t => new Set((t.toLowerCase().replace(/ё/g, 'е').match(/[а-я]{4,}/g) || []).map(w => w.slice(0, w.length > 4 ? 4 : 3)));   // «лета»/«лето» — одна основа
+
+function tdFind(word, ctx) {
+  const k = word.toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\-]/gu, '');
+  if (!TD.keys) TD.keys = Object.keys(TD.index);
+  const score = {};                                        // id статьи -> [очки, точная ли форма]
+  const add = (ids, pts, exact) => ids.forEach(i => { if (!score[i] || score[i][0] < pts) score[i] = [pts, exact]; });
+  if (TD.index[k]) add(TD.index[k], 100, true);
+  for (const key of TD.keys) {                              // формы с длинным общим началом
+    let n = 0; while (n < key.length && n < k.length && key[n] === k[n]) n++;
+    // форма целиком — начало слова (основа + окончание: «җаңһр» для «җаңһрин») важнее соседа «җаңһрч»
+    if (n >= 3 && n >= k.length - 4) add(TD.index[key], n * 2 - Math.abs(key.length - k.length) * 0.5 + (n === key.length ? 3 : 0), false);
+  }
+  for (const e of TD.entries) {                             // короткие глагольные формы: «ирв» = «ир-» + «-в»
+    const h = e.h.toLowerCase();
+    if (h.endsWith('х') && h.length >= 3) {
+      const stem = h.slice(0, -1);
+      if (k.startsWith(stem) && VERB_SUF.test(k.slice(stem.length))) add([e.i], stem.length * 2 + 2, false);
+    }
+  }
+  const ids = Object.keys(score).map(Number);
+  if (!ids.length) return null;
+  const verb = VERB_END.test(k), ctxS = ruStems(ctx || '');
+  const total = i => {
+    const e = TD.byId[i];
+    let s = score[i][0];
+    if (!score[i][1]) {
+      s += (e.h.endsWith('х') === verb) ? 3 : -2;                            // часть речи по окончанию
+      const h = e.h.toLowerCase().replace(/\s+I+$/, '');
+      const stem = h.endsWith('х') ? h.slice(0, -1) : h;                     // «хатхх» -> «хатх-», «хатх» -> «хат-»
+      if (k.startsWith(stem) && (h.endsWith('х') ? VERB_SUF : NOUN_SUF).test(k.slice(stem.length))) s += 6;
+    }
+    const txt = e.s.map(([n, g, ex]) => g + ' ' + ex.map(x => x[2]).join(' ')).join(' ');
+    for (const st of ruStems(txt)) if (ctxS.has(st)) s += 2;               // смысл: общие основы с переводом строки
+    return s + Math.log1p(e.f) * 0.3;
+  };
+  ids.sort((a, b) => total(b) - total(a));
+  return {ids, exact: score[ids[0]][1]};
+}
+
+// русский контекст строки: подстрочник или строфы перевода, куда она входит
+function ruContext(l) {
+  const part = CH.parts[l.part];
+  return (l.line.rus || '') + ' ' + ruFor(l).map(si => part.ru.stanzas[si].lines.join(' ')).join(' ');
+}
+
+async function showDict(word, l) {
+  const box = $('#dict'); box.innerHTML = '<span class="hint">словарь…</span>';
+  await todaeva();
+  const r = tdFind(word, l ? ruContext(l) : '');
+  if (!r) { box.innerHTML = '<span class="hint">В словаре Тодаевой не нашлось.</span>'; return; }
+  const render = () => {
+    const e = TD.byId[r.ids[0]];
+    const senses = e.s.map(([n, g, ex]) => `<li>${esc(g)}${ex.map(([x, p, ru, line]) =>
+      `<div class="ex"><b>${esc(x)}</b> ${line ? `<a data-line="${line}">${p}</a>` : p} ${esc(ru)}</div>`).join('')}</li>`).join('');
+    const more = r.ids.slice(1, 6).map(i => `<a data-entry="${i}">${esc(TD.byId[i].h)}</a>`).join(', ');
+    box.innerHTML = '<div class="hint">Словарь языка «Джангара» (Б. Х. Тодаева)' + (r.exact ? '' : ' — по основе') + '</div>' +
+      `<div class="hdrow"><div class="tm">${esc(e.todo)}</div><div style="flex:1;min-width:0">` +
+      `<div class="hd">${esc(e.h)}${e.hom ? ' ' + e.hom : ''} <span class="lt">${esc(e.lat)}</span>
+        <span class="hint">(${e.f} в эпосе, с. ${e.p})</span></div><ol>${senses}</ol>` +
+      (e.fm ? `<details><summary class="hint">формы в эпосе (${e.fm.length})</summary><div class="ex">${e.fm.map(([lb, f]) => `<i>${esc(lb)}</i> ${esc(f)}`).join('; ')}</div></details>` : '') + '</div></div>' +
+      (more ? `<div class="hint">другие статьи: ${more}</div>` : '');
+    box.querySelectorAll('a[data-entry]').forEach(a => a.onclick = () => {   // выбранная статья — первой
+      r.ids = [+a.dataset.entry, ...r.ids.filter(i => i !== +a.dataset.entry)]; render();
+    });
+    box.querySelectorAll('a[data-line]').forEach(a => a.onclick = () => {
+      const id = a.dataset.line; closePop();
+      const x = lines.find(y => y.line.id === id);
+      if (x) selectLine(x, true); else openChapter(+id.slice(0, 2), id);
+    });
+  };
+  render();
+}
+$('#pop .x').onclick = closePop;
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closePop();
+  if (e.target.tagName === 'SELECT' || !curLine) return;
+  if (e.key === 'ArrowDown' || e.key === 'j') { const i = lines.indexOf(curLine); if (i < lines.length - 1) selectLine(lines[i + 1], true); e.preventDefault(); }
+  if (e.key === 'ArrowUp' || e.key === 'k') { const i = lines.indexOf(curLine); if (i > 0) selectLine(lines[i - 1], true); e.preventDefault(); }
+});
+document.addEventListener('mousedown', e => { if (popOpen() && !e.target.closest('#pop') && !e.target.closest('.w')) closePop(); });
+
+$('#chap').onchange = e => openChapter(+e.target.value);
+$('#showscan').onchange = e => document.body.classList.toggle('showscan', e.target.checked);
+const setFs = d => { fs = Math.max(12, Math.min(28, fs + d)); document.documentElement.style.setProperty('--fs', fs + 'px');
+  try { localStorage.setItem('jangar-fs', fs); } catch (e) {} };
+$('#fplus').onclick = () => setFs(1); $('#fminus').onclick = () => setFs(-1);
+function setTab(t) {
+  document.body.dataset.tab = t;
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  // скрытую панель прокрутить нельзя — докручиваем к выбранному, когда она показалась
+  const r = document.querySelector('.rstz.sel');
+  if (t === 'xal' && curLine) scrollPane($('#xalp'), curLine.el, 'auto');
+  if (t === 'ru' && r) scrollPane($('#rup'), r, 'auto');
+  updateBack();
+}
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => setTab(b.dataset.t));
+
+init().catch(err => { $('#xal').innerHTML = `<p style="padding:16px">Не удалось загрузить данные: ${esc(err.message)}.<br>Откройте через <code>python3 -m http.server</code> из папки web.</p>`; });
+</script>
+</body>
+</html>

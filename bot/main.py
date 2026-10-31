@@ -15,7 +15,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo
 
 from . import texts
 from .config import Config
@@ -125,7 +125,17 @@ async def main() -> None:
     if config.warmup:
         await _warmup()
 
+    # мини-приложение «Джангар»: страницу раздаёт сам бот (хостинг выставляет порт наружу по https)
+    from . import webapp
+
+    web_runner = await webapp.start(config.webapp_port) if config.webapp_port else None
+
     await bot.set_my_commands(COMMANDS)
+    if config.jangar_url and config.jangar_menu_button:
+        # кнопка рядом с полем ввода открывает «Джангар»; команды остаются в меню «/»
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(text=texts.BTN_JANGAR_MENU, web_app=WebAppInfo(url=config.jangar_url))
+        )
     me = await bot.get_me()
     log.info("бот запущен: @%s", me.username)
 
@@ -134,6 +144,8 @@ async def main() -> None:
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
     finally:
+        if web_runner:
+            await web_runner.cleanup()
         storage.close()
         await bot.session.close()
         log.info("бот остановлен")
