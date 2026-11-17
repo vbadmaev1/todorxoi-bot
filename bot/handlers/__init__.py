@@ -5,6 +5,7 @@
 
   1. common   — команды и кнопки меню. Без фильтра по состоянию, поэтому
                 работают даже когда бот ждёт текст исправления.
+     hudum    — разовые команды /hudum и /from_hudum.
      jangar   — /jangar: кнопка мини-приложения «Джангар» (тоже в любом состоянии).
   2. ocr      — /ocr (тоже в любом состоянии) и фото/картинки файлом. Раньше
                 translate: там общий ответ «я понимаю только текст».
@@ -24,7 +25,7 @@ from aiogram import Router
 from aiogram.types import ErrorEvent
 
 from .. import texts
-from . import admin, common, feedback, inline, jangar, ocr, settings, translate
+from . import admin, common, feedback, hudum, inline, jangar, ocr, settings, translate
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ def build_router() -> Router:
     root = Router(name="root")
     root.errors.register(on_error)
     root.include_router(common.router)
+    root.include_router(hudum.router)
     root.include_router(jangar.router)
     root.include_router(ocr.router)
     root.include_router(feedback.router)

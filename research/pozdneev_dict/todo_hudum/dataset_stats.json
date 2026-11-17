@@ -1,0 +1,24 @@
+{
+  "source": "todo_xudum.xlsx",
+  "sha256": "4c1e273db7c94f228a51f82535e5d76b39f6d7d285a61a764ec206c93d73c0cf",
+  "rows": {
+    "raw": 25688,
+    "removed_cross_reference": 1881,
+    "non_spelling": 2202,
+    "duplicates": 912,
+    "too_long": 19,
+    "missing": 1
+  },
+  "split_pairs": {
+    "train": 17988,
+    "test": 2201,
+    "validation": 2365
+  },
+  "related_spelling_pairs": {
+    "train": 10030,
+    "test": 1242,
+    "validation": 1366
+  },
+  "ambiguous_todo": 3270,
+  "ambiguous_hudum": 3369
+}

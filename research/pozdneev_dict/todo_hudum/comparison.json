@@ -1,0 +1,54 @@
+{
+  "all_pairs_v1": {
+    "all_test_pairs": {
+      "todo_to_hudum": {
+        "headwords": 1700,
+        "exact_match": 0.4076470588235294,
+        "cer": 0.31206639434610645
+      },
+      "hudum_to_todo": {
+        "headwords": 1814,
+        "exact_match": 0.38478500551267913,
+        "cer": 0.3382699631263979
+      }
+    },
+    "related_test_pairs": {
+      "todo_to_hudum": {
+        "headwords": 1149,
+        "exact_match": 0.5787641427328112,
+        "cer": 0.12350284704496367
+      },
+      "hudum_to_todo": {
+        "headwords": 1161,
+        "exact_match": 0.5753660637381568,
+        "cer": 0.13976121199959868
+      }
+    }
+  },
+  "related_pairs_v2": {
+    "all_test_pairs": {
+      "todo_to_hudum": {
+        "headwords": 1700,
+        "exact_match": 0.4176470588235294,
+        "cer": 0.3102220495889169
+      },
+      "hudum_to_todo": {
+        "headwords": 1814,
+        "exact_match": 0.40297684674751927,
+        "cer": 0.3108394359377837
+      }
+    },
+    "related_test_pairs": {
+      "todo_to_hudum": {
+        "headwords": 1149,
+        "exact_match": 0.6031331592689295,
+        "cer": 0.09939167974882261
+      },
+      "hudum_to_todo": {
+        "headwords": 1161,
+        "exact_match": 0.6218776916451335,
+        "cer": 0.09641817999398014
+      }
+    }
+  }
+}
