@@ -24,7 +24,7 @@ from aiogram import Router
 from aiogram.types import ErrorEvent
 
 from .. import texts
-from . import admin, common, feedback, jangar, ocr, settings, translate
+from . import admin, common, feedback, inline, jangar, ocr, settings, translate
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +56,7 @@ def build_router() -> Router:
     root.include_router(settings.router)
     root.include_router(admin.router)
     root.include_router(translate.router)
+    root.include_router(inline.router)
     return root
 
 

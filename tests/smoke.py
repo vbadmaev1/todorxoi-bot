@@ -36,6 +36,7 @@ from aiogram.types import (  # noqa: E402
     Chat,
     Document,
     File,
+    InlineQuery,
     Message,
     PhotoSize,
     Update,
@@ -651,6 +652,31 @@ async def main():
     _, m = session.last("SendMessage")
     check("кириллицей" in m.text, "/fix на латинице — понятный отказ")
     await dp.feed_update(bot, msg("/translit"))
+
+    print("\n4d.1. Inline-режим — исправление в другом чате")
+    check("inline_query" in dp.resolve_used_update_types(),
+          "polling получает inline-запросы")
+    for raw, expected in (
+        ("нюдн", "нүдн"),
+        ("<нюдн & кюн!>", "<нүдн & күн!>"),
+        ("нүдн", "нүдн"),
+        ("   ", None),
+        ("xalimaq", None),
+    ):
+        query = InlineQuery(id=str(_next_id()), from_user=USER, query=raw,
+                            offset="", chat_type="group")
+        await dp.feed_update(bot, Update(update_id=_next_id(), inline_query=query))
+        name, answer = session.last()
+        check(name == "AnswerInlineQuery" and answer.inline_query_id == query.id,
+              f"inline: ответ в меню результатов для {raw!r}")
+        results = answer.results if name == "AnswerInlineQuery" else []
+        if expected is None:
+            check(not results, f"inline: нет результата для {raw!r}")
+        else:
+            check(len(results) == 1
+                  and results[0].input_message_content.message_text == expected
+                  and results[0].input_message_content.parse_mode is None,
+                  f"inline: отправляется только обычный текст {expected!r}")
 
     print("\n4e. Тодо бичиг и латиница -> кириллица")
     from core import segmenter
