@@ -653,15 +653,26 @@ async def main():
     check("кириллицей" in m.text, "/fix на латинице — понятный отказ")
     await dp.feed_update(bot, msg("/translit"))
 
-    print("\n4d.1. Inline-режим — исправление и тодо бичик в другом чате")
+    print("\n4d.1. Худум бичик и inline-режим")
+    for payload in ("гер", "ger", "ᡎᡄᠷ"):
+        await dp.feed_update(bot, msg(f"/hudum {payload}"))
+        _, answer = session.last("SendMessage")
+        check("<code>ᠭᠡᠷ</code>" in answer.text, f"/hudum {payload} → ᠭᠡᠷ")
+    await dp.feed_update(bot, msg("/from_hudum ᠭᠡᠷ"))
+    _, answer = session.last("SendMessage")
+    check("<code>ᡎᡄᠷ</code>" in answer.text, "/from_hudum ᠭᠡᠷ → ᡎᡄᠷ")
     check("inline_query" in dp.resolve_used_update_types(),
           "polling получает inline-запросы")
     for raw, expected in (
-        ("нюдн", [("fix", "нүдн"), ("todo", "ᠨᡅᡑᡉᠨ")]),
-        ("<нюдн & кюн!>", [("fix", "<нүдн & күн!>"), ("todo", "ᠨᡅᡑᡉᠨ ᡍᡉᡏᡉᠨ")]),
-        ("нүдн", [("fix", "нүдн"), ("todo", "ᠨᡅᡑᡉᠨ")]),
+        ("нюдн", [("fix", "нүдн"), ("todo", "ᠨᡅᡑᡉᠨ"), ("hudum", "ᠨᠢᠳᠦ")]),
+        ("<нюдн & кюн!>", [
+            ("fix", "<нүдн & күн!>"), ("todo", "ᠨᡅᡑᡉᠨ ᡍᡉᡏᡉᠨ"), ("hudum", "ᠨᠢᠳᠦ ᠬᠥᠮᠦᠨ"),
+        ]),
+        ("нүдн", [("fix", "нүдн"), ("todo", "ᠨᡅᡑᡉᠨ"), ("hudum", "ᠨᠢᠳᠦ")]),
         ("   ", []),
-        ("xalimaq", []),
+        ("???", []),
+        ("ger", [("todo", "ᡎᡄᠷ"), ("hudum", "ᠭᠡᠷ")]),
+        ("ᡎᡄᠷ", [("hudum", "ᠭᠡᠷ")]),
     ):
         query = InlineQuery(id=str(_next_id()), from_user=USER, query=raw,
                             offset="", chat_type="group")

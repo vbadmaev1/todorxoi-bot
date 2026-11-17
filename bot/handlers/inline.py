@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Исправление калмыцкого текста и запись тодо бичик через @имя_бота."""
+"""Исправление кириллицы и конвертация письма через @имя_бота."""
 
 import asyncio
 import logging
@@ -8,44 +8,62 @@ from aiogram import Router
 from aiogram.types import InlineQuery, InlineQueryResultArticle, InputTextMessageContent
 
 import core
+from core.hudum import get_converter
+from core.translit_todo import SCRIPT_CYRILLIC, SCRIPT_TODO
 
 from .. import texts
+from ..formatting import MESSAGE_LIMIT
 
 log = logging.getLogger(__name__)
 router = Router(name="inline_fix")
 
 
-def _inline_results(text: str) -> list[InlineQueryResultArticle]:
-    try:
-        fixed = core.process(text, core.TARGET_FIX).fixed_text
-    except core.PipelineError:
-        # Telegram запрашивает результаты и для неполного ввода.
-        return []
-    if not fixed:
-        return []
+def _article(result_id: str, title: str, description: str, text: str) -> InlineQueryResultArticle:
+    return InlineQueryResultArticle(
+        id=result_id,
+        title=title,
+        description=description,
+        input_message_content=InputTextMessageContent(message_text=text, parse_mode=None),
+    )
 
-    results = [
-        InlineQueryResultArticle(
-            id="fix",
-            title=fixed,
-            description=texts.INLINE_FIX_SEND if fixed != text else texts.INLINE_FIX_UNCHANGED,
-            input_message_content=InputTextMessageContent(message_text=fixed, parse_mode=None),
-        )
-    ]
-    try:
-        todo = core.process(fixed, core.TARGET_TODO).todo
-    except Exception:
-        log.exception("не удалось записать inline-текст тодо бичик")
-        return results
+
+def _inline_results(text: str) -> list[InlineQueryResultArticle]:
+    script = core.detect_script(text)
+    results = []
+    if script == SCRIPT_CYRILLIC:
+        try:
+            fixed = core.process(text, core.TARGET_FIX).fixed_text
+        except core.PipelineError:
+            return []
+        if not fixed:
+            return []
+        description = texts.INLINE_FIX_SEND if fixed != text else texts.INLINE_FIX_UNCHANGED
+        results.append(_article("fix", fixed, description, fixed))
+        text = fixed
+
+    if script == SCRIPT_TODO:
+        todo = text
+    else:
+        try:
+            todo = core.process(text, core.TARGET_TODO).todo
+        except core.PipelineError:
+            return results
+        except Exception:
+            log.exception("не удалось записать inline-текст тодо бичик")
+            return results
+        if todo and len(todo) <= MESSAGE_LIMIT:
+            results.append(_article("todo", texts.INLINE_TODO_TITLE, todo, todo))
+
     if todo:
-        results.append(
-            InlineQueryResultArticle(
-                id="todo",
-                title=texts.INLINE_TODO_TITLE,
-                description=todo,
-                input_message_content=InputTextMessageContent(message_text=todo, parse_mode=None),
-            )
-        )
+        try:
+            hudum = get_converter().convert(todo, "hudum")
+        except ValueError:
+            return results
+        except Exception:
+            log.exception("не удалось записать inline-текст худум бичик")
+            return results
+        if hudum and len(hudum) <= MESSAGE_LIMIT:
+            results.append(_article("hudum", texts.HUDUM_RESULT["hudum"], hudum, hudum))
     return results
 
 
