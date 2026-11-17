@@ -222,11 +222,10 @@ ONNX-адаптер использует разбиение страницы н�
 Unicode-селекторы, разделитель гласных и узкие пробелы в прочитанном
 худуме обрабатываются как часть исходной записи.
 
-Для работы нужен INT8-экспорт [image2bichig](https://github.com/tugstugi/mongolian-nlp/tree/master/image2bichig)
-`crnn_int8_dynamic.onnx`. Положите файл в `model/hudum_ocr_int8.onnx`
-или задайте `OCR_HUDUM_MODEL_PATH`. В Docker путь должен быть доступен
-внутри контейнера, например `/data/hudum_ocr_int8.onnx` на существующем томе.
-Требуется ONNX Runtime из стандартных зависимостей бота.
+В репозитории есть INT8-экспорт модели [image2bichig](https://github.com/tugstugi/mongolian-nlp/tree/master/image2bichig)
+в файле `model/hudum_ocr_int8.onnx`. Бот загружает его через ONNX Runtime
+из стандартных зависимостей. Для другого совместимого файла задайте
+`OCR_HUDUM_MODEL_PATH`.
 
 ### Тодо бичиг → кириллица
 
