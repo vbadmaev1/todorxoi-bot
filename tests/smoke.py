@@ -653,15 +653,15 @@ async def main():
     check("кириллицей" in m.text, "/fix на латинице — понятный отказ")
     await dp.feed_update(bot, msg("/translit"))
 
-    print("\n4d.1. Inline-режим — исправление в другом чате")
+    print("\n4d.1. Inline-режим — исправление и тодо бичик в другом чате")
     check("inline_query" in dp.resolve_used_update_types(),
           "polling получает inline-запросы")
     for raw, expected in (
-        ("нюдн", "нүдн"),
-        ("<нюдн & кюн!>", "<нүдн & күн!>"),
-        ("нүдн", "нүдн"),
-        ("   ", None),
-        ("xalimaq", None),
+        ("нюдн", [("fix", "нүдн"), ("todo", "ᠨᡅᡑᡉᠨ")]),
+        ("<нюдн & кюн!>", [("fix", "<нүдн & күн!>"), ("todo", "ᠨᡅᡑᡉᠨ ᡍᡉᡏᡉᠨ")]),
+        ("нүдн", [("fix", "нүдн"), ("todo", "ᠨᡅᡑᡉᠨ")]),
+        ("   ", []),
+        ("xalimaq", []),
     ):
         query = InlineQuery(id=str(_next_id()), from_user=USER, query=raw,
                             offset="", chat_type="group")
@@ -670,13 +670,10 @@ async def main():
         check(name == "AnswerInlineQuery" and answer.inline_query_id == query.id,
               f"inline: ответ в меню результатов для {raw!r}")
         results = answer.results if name == "AnswerInlineQuery" else []
-        if expected is None:
-            check(not results, f"inline: нет результата для {raw!r}")
-        else:
-            check(len(results) == 1
-                  and results[0].input_message_content.message_text == expected
-                  and results[0].input_message_content.parse_mode is None,
-                  f"inline: отправляется только обычный текст {expected!r}")
+        outputs = [(item.id, item.input_message_content.message_text) for item in results]
+        check(outputs == expected
+              and all(item.input_message_content.parse_mode is None for item in results),
+              f"inline: варианты для {raw!r} в ожидаемом порядке и без разметки")
 
     print("\n4e. Тодо бичиг и латиница -> кириллица")
     from core import segmenter
