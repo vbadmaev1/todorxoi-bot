@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Три основных сценария: транслитерация, тодо бичиг, картинка.
+"""Обработка текста в выбранном режиме.
 
 Тяжёлая часть (модель + рендер) уезжает в поток через asyncio.to_thread,
 иначе один длинный запрос подвесил бы всех остальных пользователей.
@@ -20,7 +20,7 @@ import core
 
 from .. import formatting, keyboards, texts
 from ..config import Config
-from ..state import get_mode
+from ..state import MODES, get_mode
 from ..storage import Storage
 from .settings import load_fix_letters, load_options, load_punctuation, load_show_time
 
@@ -81,6 +81,7 @@ async def handle_text(
         source_script=res.source_script,
         translit=res.translit,
         todo=res.todo,
+        hudum=res.hudum,
         cyrillic=res.cyrillic,
         elapsed_ms=res.elapsed_ms,
         steps=res.steps_ms,
@@ -96,9 +97,15 @@ async def handle_text(
     if target == core.TARGET_IMAGE:
         await _send_image(message, res, markup, show_time)
     else:
-        await message.answer(
-            formatting.render_result(res, show_time), reply_markup=markup
-        )
+        reply = formatting.render_result(res, show_time)
+        if target == core.TARGET_HUDUM and len(reply) > formatting.MESSAGE_LIMIT:
+            await message.answer_document(
+                BufferedInputFile(res.text_output.encode("utf-8"), filename="hudum.txt"),
+                caption=texts.HUDUM_TITLE,
+                reply_markup=markup,
+            )
+        else:
+            await message.answer(reply, reply_markup=markup)
 
 
 def _letters_log(res, enabled: bool):
@@ -177,7 +184,7 @@ async def any_text(
     message: Message, state: FSMContext, storage: Storage, config: Config
 ) -> None:
     """Любой обычный текст — обрабатываем в текущем режиме."""
-    mode = await get_mode(state)
+    mode = await get_mode(state, storage)
     await handle_text(message, message.text, mode, storage, config)
 
 
@@ -191,11 +198,15 @@ async def non_text(message: Message) -> None:
 async def convert_further(
     callback: CallbackQuery, storage: Storage, config: Config
 ) -> None:
-    """Кнопки «→ Тодо бичиг» и «→ Картинка» под готовым ответом."""
+    """Кнопки преобразования под готовым ответом."""
     try:
         _, target, raw_id = callback.data.split(":", 2)
         request_id = int(raw_id)
     except ValueError:
+        await callback.answer()
+        return
+
+    if target not in MODES:
         await callback.answer()
         return
 
@@ -204,16 +215,22 @@ async def convert_further(
         await callback.answer(texts.UNKNOWN_REQUEST, show_alert=True)
         return
 
+    text = _source_text(row, target)
+    if not text:
+        await callback.answer(texts.UNKNOWN_REQUEST, show_alert=True)
+        return
+
     await callback.answer()
-    await handle_text(
-        callback.message, _source_text(row), target, storage, config,
-        user=callback.from_user,
-    )
+    await handle_text(callback.message, text, target, storage, config, user=callback.from_user)
 
 
-def _source_text(row: dict) -> str:
-    """Что переводить по кнопке под ответом: для режима /fix — уже
-    исправленный текст, для остальных — то, что прислал человек."""
+def _source_text(row: dict, target: str) -> str:
+    """Использует исправленную кириллицу или уже полученный тодо, если есть."""
+    if target == core.TARGET_HUDUM:
+        if row.get("todo"):
+            return row["todo"]
+        if row.get("target") == "ocr":
+            return ""
     if row.get("target") == core.TARGET_FIX and row.get("letters_json"):
         try:
             return json.loads(row["letters_json"]).get("text") or row["input_text"]

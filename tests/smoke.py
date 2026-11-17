@@ -30,7 +30,7 @@ from aiogram import Bot, Dispatcher  # noqa: E402
 from aiogram.client.default import DefaultBotProperties  # noqa: E402
 from aiogram.client.session.base import BaseSession  # noqa: E402
 from aiogram.enums import ParseMode  # noqa: E402
-from aiogram.fsm.storage.memory import MemoryStorage  # noqa: E402
+from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation  # noqa: E402
 from aiogram.types import (  # noqa: E402
     CallbackQuery,
     Chat,
@@ -191,7 +191,7 @@ async def main():
         session=session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher(storage=MemoryStorage())
+    dp = Dispatcher(storage=MemoryStorage(), events_isolation=SimpleEventIsolation())
     dp["storage"] = storage
     dp["config"] = config
     dp.include_router(build_router())
@@ -210,6 +210,8 @@ async def main():
     _, m = session.last("SendMessage")
     check(m and "Тодо Бичик бот" in m.text, "/start отвечает приветствием")
     check("t.me/todorxoi_uzuq" in m.text, "в /start есть ссылка на канал")
+    menu = [button.text for row in m.reply_markup.keyboard for button in row]
+    check("ᠬ Худум бичик" in menu, "режим худум есть в главном меню")
 
     await dp.feed_update(bot, msg("/help"))
     _, m = session.last("SendMessage")
@@ -654,13 +656,51 @@ async def main():
     await dp.feed_update(bot, msg("/translit"))
 
     print("\n4d.1. Худум бичик и inline-режим")
+    await dp.feed_update(bot, msg("ᠬ Худум бичик"))
+    _, answer = session.last("SendMessage")
+    check("Худум бичик" in answer.text and "Пришлите текст" in answer.text,
+          "кнопка включает режим худум")
     for payload in ("гер", "ger", "ᡎᡄᠷ"):
-        await dp.feed_update(bot, msg(f"/hudum {payload}"))
+        await dp.feed_update(bot, msg(payload))
         _, answer = session.last("SendMessage")
-        check("<code>ᠭᠡᠷ</code>" in answer.text, f"/hudum {payload} → ᠭᠡᠷ")
+        check("<code>ᠭᠡᠷ</code>" in answer.text, f"{payload} → ᠭᠡᠷ в режиме худум")
+
+    hudum_id = max_request_id(storage)
+    row = await storage.get_request(hudum_id)
+    check(row["target"] == "hudum" and row["hudum"] == "ᠭᠡᠷ", "результат худум сохраняется")
+    await dp.feed_update(bot, cb(f"fb:up:{hudum_id}"))
+    export = (await storage.export_csv()).decode("utf-8-sig")
+    check("bot_hudum" in export and "ᠭᠡᠷ" in export, "оценку худум можно выгрузить с результатом")
+
+    await dp.fsm.get_context(bot=bot, chat_id=CHAT.id, user_id=USER.id).clear()
+    storage.close()
+    storage.connect()
+    await dp.feed_update(bot, msg("/mode"))
+    _, answer = session.last("SendMessage")
+    check("Худум бичик" in answer.text, "/mode читает выбранный режим из SQLite после перезапуска")
+    await dp.feed_update(bot, msg("гер"))
+    _, answer = session.last("SendMessage")
+    check("<code>ᠭᠡᠷ</code>" in answer.text, "обычный текст после перезапуска идёт в худум")
+
+    await dp.feed_update(bot, msg("/todo гер"))
+    _, answer = session.last("SendMessage")
+    todo_id = max_request_id(storage)
+    buttons = [btn.callback_data for row in answer.reply_markup.inline_keyboard for btn in row]
+    check(f"conv:hudum:{todo_id}" in buttons, "из результата тодо можно перейти в худум")
+    await dp.feed_update(bot, cb(f"conv:hudum:{todo_id}"))
+    _, answer = session.last("SendMessage")
+    check("<code>ᠭᠡᠷ</code>" in answer.text, "кнопка под тодо использует готовое написание")
+    await dp.feed_update(bot, msg("/mode"))
+    _, answer = session.last("SendMessage")
+    check("Тодо бичик" in answer.text, "разовая конвертация не меняет выбранный режим")
+
+    await dp.feed_update(bot, msg("/hudum гер"))
+    _, answer = session.last("SendMessage")
+    check("<code>ᠭᠡᠷ</code>" in answer.text, "/hudum с текстом меняет режим и обрабатывает текст")
     await dp.feed_update(bot, msg("/from_hudum ᠭᠡᠷ"))
     _, answer = session.last("SendMessage")
     check("<code>ᡎᡄᠷ</code>" in answer.text, "/from_hudum ᠭᠡᠷ → ᡎᡄᠷ")
+    await dp.feed_update(bot, msg("/translit"))
     check("inline_query" in dp.resolve_used_update_types(),
           "polling получает inline-запросы")
     for raw, expected in (
@@ -709,10 +749,11 @@ async def main():
           "латиница: в ответе кириллица, без повтора транслитерации")
 
     print("\n5. Фидбэк: 👍")
+    up_before = (await storage.stats())["up"]
     row = await storage.get_request(1)
     await dp.feed_update(bot, cb(f"fb:up:{row['id']}"))
     stats = await storage.stats()
-    check(stats["up"] == 1, "палец вверх записан в базу")
+    check(stats["up"] == up_before + 1, "палец вверх записан в базу")
 
     print("\n6. Фидбэк: 👎 и исправление")
     await dp.feed_update(bot, cb("fb:down:2"))
@@ -843,6 +884,11 @@ async def _check_ocr(dp, bot, session, storage):
     with storage._lock:
         row = dict(storage._conn.execute("SELECT * FROM requests ORDER BY id DESC LIMIT 1").fetchone())
     check(row["target"] == "ocr" and row["input_text"] == "photo:ph1", "запрос записан в базу как ocr с file_id")
+    check("→ Худум бичик" in buttons, "под распознанным фото есть переход в худум")
+    await dp.feed_update(bot, cb(f"conv:hudum:{row['id']}"))
+    converted = await storage.get_request(max_request_id(storage))
+    check(converted["input_text"] == row["todo"] and bool(converted["hudum"]),
+          "переход в худум использует текст с фото")
     # по умолчанию знаков нет ни на картинке, ни в распознанном тексте
     got = (row["todo"] or "").replace("\n", " ")
     ratio = difflib.SequenceMatcher(None, sample.todo, got).ratio()

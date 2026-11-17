@@ -27,9 +27,9 @@ router = Router(name="common")
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
+async def cmd_start(message: Message, state: FSMContext, storage: Storage) -> None:
     await state.set_state(None)
-    mode = await get_mode(state)
+    mode = await get_mode(state, storage)
     await message.answer(
         texts.START.format(mode=texts.MODE_TITLES[mode]),
         reply_markup=keyboards.main_menu(),
@@ -46,8 +46,8 @@ async def cmd_help(message: Message) -> None:
 
 
 @router.message(Command("mode"))
-async def cmd_mode(message: Message, state: FSMContext) -> None:
-    mode = await get_mode(state)
+async def cmd_mode(message: Message, state: FSMContext, storage: Storage) -> None:
+    mode = await get_mode(state, storage)
     await message.answer(texts.MODE_CURRENT.format(mode=texts.MODE_TITLES[mode]))
 
 
@@ -59,10 +59,8 @@ async def _switch(
     storage: Storage,
     config: Config,
 ) -> None:
-    # переключение режима отменяет незаконченный ввод исправления,
-    # но не сбрасывает данные состояния (в них лежит выбранный режим)
+    await set_mode(state, storage, mode)
     await state.set_state(None)
-    await set_mode(state, mode)
     if payload and payload.strip():
         # текст пришёл сразу вместе с командой — обрабатываем, не переспрашивая
         await handle_text(message, payload.strip(), mode, storage, config)
@@ -87,6 +85,14 @@ async def cmd_todo(
     storage: Storage, config: Config,
 ) -> None:
     await _switch(message, state, "todo", command.args, storage, config)
+
+
+@router.message(Command("hudum"))
+async def cmd_hudum(
+    message: Message, command: CommandObject, state: FSMContext,
+    storage: Storage, config: Config,
+) -> None:
+    await _switch(message, state, "hudum", command.args, storage, config)
 
 
 @router.message(Command("image"))
@@ -124,6 +130,13 @@ async def btn_todo(
     message: Message, state: FSMContext, storage: Storage, config: Config
 ) -> None:
     await _switch(message, state, "todo", None, storage, config)
+
+
+@router.message(F.text == texts.BTN_HUDUM)
+async def btn_hudum(
+    message: Message, state: FSMContext, storage: Storage, config: Config
+) -> None:
+    await _switch(message, state, "hudum", None, storage, config)
 
 
 @router.message(F.text == texts.BTN_IMAGE)

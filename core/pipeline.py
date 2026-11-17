@@ -3,11 +3,12 @@
 pipeline.py — единая точка входа для бота: «дай текст и скажи, что нужно
 на выходе». Здесь же замеряется время работы каждого шага.
 
-Четыре сценария:
+Режимы обработки:
   1. TARGET_TRANSLIT — калмыцкая кириллица -> транслитерация на латинице
   2. TARGET_TODO     — кириллица / транслитерация -> тодо бичиг (юникод)
-  3. TARGET_IMAGE    — кириллица / транслитерация / тодо бичиг -> картинка
-  4. TARGET_FIX      — кириллица -> та же кириллица с исправленными
+  3. TARGET_HUDUM    — кириллица / транслитерация / тодо бичиг -> худум бичик
+  4. TARGET_IMAGE    — кириллица / транслитерация / тодо бичиг -> картинка
+  5. TARGET_FIX      — кириллица -> та же кириллица с исправленными
                        калмыцкими буквами (см. core/fix_letters.py)
 
 Тип входного текста определяется автоматически (detect_script), так что
@@ -36,6 +37,7 @@ log = logging.getLogger(__name__)
 
 TARGET_TRANSLIT = "translit"
 TARGET_TODO = "todo"
+TARGET_HUDUM = "hudum"
 TARGET_IMAGE = "image"
 TARGET_FIX = "fix"
 
@@ -141,6 +143,7 @@ class Result:
     elapsed_ms: float = 0.0
     steps_ms: dict = field(default_factory=dict)
     stats: dict = field(default_factory=dict)
+    hudum: Optional[str] = None
 
     @property
     def image(self):
@@ -158,6 +161,8 @@ class Result:
             return self.translit or ""
         if self.target == TARGET_FIX:
             return self.fixed_text or ""
+        if self.target == TARGET_HUDUM:
+            return self.hudum or ""
         return self.todo or ""
 
 
@@ -314,16 +319,30 @@ def process(
         res.letter_fixes = fixed.fixes
         res.steps_ms["буквы"] = (time.perf_counter() - t0) * 1000
 
-    elif target == TARGET_TODO:
+    elif target in (TARGET_TODO, TARGET_HUDUM):
         if script == SCRIPT_TODO:
-            raise PipelineError(
-                "Этот текст уже записан тодо бичик. Если нужна картинка — "
-                "используйте /image."
-            )
-        res.translit = _to_translit(text, script, res, fix_letters)
-        t0 = time.perf_counter()
-        res.todo = apply_punctuation(translit_to_todo(res.translit), punctuation)
-        res.steps_ms["translit→тодо"] = (time.perf_counter() - t0) * 1000
+            if target == TARGET_TODO:
+                raise PipelineError(
+                    "Этот текст уже записан тодо бичик. Если нужна картинка — "
+                    "используйте /image."
+                )
+            res.todo = text
+        else:
+            res.translit = _to_translit(text, script, res, fix_letters)
+            t0 = time.perf_counter()
+            res.todo = apply_punctuation(translit_to_todo(res.translit), punctuation)
+            res.steps_ms["translit→тодо"] = (time.perf_counter() - t0) * 1000
+
+        if target == TARGET_HUDUM:
+            from .hudum import get_converter
+
+            t0 = time.perf_counter()
+            converter = get_converter()
+            try:
+                res.hudum = converter.convert(res.todo, "hudum")
+            except ValueError as exc:
+                raise PipelineError("Для записи худум бичик нужен текст со словами.") from exc
+            res.steps_ms["тодо→худум"] = (time.perf_counter() - t0) * 1000
 
     elif target == TARGET_IMAGE:
         if res.language and opts.uses_rules:

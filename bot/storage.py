@@ -4,7 +4,7 @@ storage.py — куда бот складывает запросы и обрат
 
 Два слоя, намеренно дублирующих друг друга:
 
-  1. SQLite (data/todorxoi.sqlite3) — основное хранилище. Две таблицы:
+  1. SQLite (data/todorxoi.sqlite3) — основное хранилище.
      requests (что попросили, что получилось, сколько это заняло) и
      feedback (палец вверх/вниз и присланный правильный ответ). Из него
      удобно делать выгрузку и считать статистику.
@@ -43,11 +43,12 @@ CREATE TABLE IF NOT EXISTS requests (
     user_id      INTEGER,
     username     TEXT,
     chat_id      INTEGER,
-    target       TEXT    NOT NULL,   -- translit | todo | image | fix | ocr
+    target       TEXT    NOT NULL,   -- translit | todo | hudum | image | fix | ocr
     source_script TEXT,              -- cyrillic | translit | todo
     input_text   TEXT    NOT NULL,
     translit     TEXT,
     todo         TEXT,
+    hudum        TEXT,
     cyrillic     TEXT,               -- кириллица из тодо бичиг/транслитерации (фото, латиница)
     elapsed_ms   REAL,
     steps_json   TEXT,
@@ -76,6 +77,13 @@ CREATE TABLE IF NOT EXISTS user_settings (
     punctuation TEXT,               -- off | frame | all: знаки препинания тодо бичиг
     show_time  TEXT,                -- on | off: время работы под ответом
     updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_modes (
+    chat_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    mode    TEXT    NOT NULL,
+    PRIMARY KEY (chat_id, user_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_requests_user ON requests(user_id);
@@ -109,6 +117,7 @@ class Storage:
         "ALTER TABLE requests ADD COLUMN letters_json TEXT",
         "ALTER TABLE user_settings ADD COLUMN punctuation TEXT",
         "ALTER TABLE requests ADD COLUMN cyrillic TEXT",
+        "ALTER TABLE requests ADD COLUMN hudum TEXT",
         "ALTER TABLE user_settings ADD COLUMN show_time TEXT",
     )
 
@@ -155,6 +164,7 @@ class Storage:
             "input_text": kw["input_text"],
             "translit": kw.get("translit"),
             "todo": kw.get("todo"),
+            "hudum": kw.get("hudum"),
             "cyrillic": kw.get("cyrillic"),
             "elapsed_ms": kw.get("elapsed_ms"),
             "steps_json": json.dumps(kw.get("steps") or {}, ensure_ascii=False),
@@ -168,10 +178,10 @@ class Storage:
             cur = self._conn.execute(
                 """INSERT INTO requests
                    (created_at, user_id, username, chat_id, target, source_script,
-                    input_text, translit, todo, cyrillic, elapsed_ms, steps_json, ok,
+                    input_text, translit, todo, hudum, cyrillic, elapsed_ms, steps_json, ok,
                     error, letters_json)
                    VALUES (:created_at, :user_id, :username, :chat_id, :target,
-                           :source_script, :input_text, :translit, :todo, :cyrillic,
+                           :source_script, :input_text, :translit, :todo, :hudum, :cyrillic,
                            :elapsed_ms, :steps_json, :ok, :error, :letters_json)""",
                 row,
             )
@@ -215,6 +225,23 @@ class Storage:
         return dict(row) if row else None
 
     # ---------------------------------------------- настройки пользователя
+
+    def _get_mode(self, chat_id: int, user_id: int) -> Optional[str]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT mode FROM chat_modes WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            ).fetchone()
+        return row["mode"] if row else None
+
+    def _set_mode(self, chat_id: int, user_id: int, mode: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO chat_modes (chat_id, user_id, mode) VALUES (?, ?, ?)
+                   ON CONFLICT(chat_id, user_id) DO UPDATE SET mode = excluded.mode""",
+                (chat_id, user_id, mode),
+            )
+            self._conn.commit()
 
     def _get_settings(self, user_id: int) -> dict:
         with self._lock:
@@ -303,7 +330,8 @@ class Storage:
                    r.translit      AS bot_translit,
                    r.todo          AS bot_todo,
                    r.elapsed_ms    AS elapsed_ms,
-                   r.letters_json  AS letters
+                   r.letters_json  AS letters,
+                   r.hudum         AS bot_hudum
             FROM feedback f
             JOIN requests r ON r.id = f.request_id
         """
@@ -332,6 +360,12 @@ class Storage:
 
     async def get_request(self, request_id: int) -> Optional[dict]:
         return await asyncio.to_thread(self._get_request, request_id)
+
+    async def get_mode(self, chat_id: int, user_id: int) -> Optional[str]:
+        return await asyncio.to_thread(self._get_mode, chat_id, user_id)
+
+    async def set_mode(self, chat_id: int, user_id: int, mode: str) -> None:
+        await asyncio.to_thread(self._set_mode, chat_id, user_id, mode)
 
     async def get_settings(self, user_id: int) -> dict:
         return await asyncio.to_thread(self._get_settings, user_id)

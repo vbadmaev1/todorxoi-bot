@@ -16,6 +16,7 @@ from . import texts
 #   fb:up:<request_id>      — палец вверх
 #   fb:down:<request_id>    — палец вниз (дальше бот просит правильный ответ)
 #   conv:todo:<request_id>  — «а теперь то же самое в тодо бичиг»
+#   conv:hudum:<request_id>
 #   conv:image:<request_id>
 #   set:pick:<поле>         — открыть палитру/список размеров
 #   set:set:<поле>:<знач>   — выбрать значение
@@ -38,9 +39,9 @@ PUNCT_LABELS = texts.PUNCT_LABELS
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=texts.BTN_TRANSLIT), KeyboardButton(text=texts.BTN_TODO)],
-            [KeyboardButton(text=texts.BTN_IMAGE), KeyboardButton(text=texts.BTN_FIX)],
-            [KeyboardButton(text=texts.BTN_HELP)],
+            [KeyboardButton(text=texts.BTN_TRANSLIT), KeyboardButton(text=texts.BTN_FIX)],
+            [KeyboardButton(text=texts.BTN_TODO), KeyboardButton(text=texts.BTN_HUDUM)],
+            [KeyboardButton(text=texts.BTN_IMAGE), KeyboardButton(text=texts.BTN_HELP)],
         ],
         resize_keyboard=True,
         input_field_placeholder=texts.MENU_PLACEHOLDER,
@@ -78,6 +79,13 @@ def result_keyboard(request_id: int, target: str, with_feedback: bool = True):
         )
     if convert:
         rows.append(convert)
+
+    if target in ("translit", "todo", "image", "fix", "ocr"):
+        rows.append([
+            InlineKeyboardButton(
+                text=texts.BTN_TO_HUDUM, callback_data=f"{CB_CONVERT}:hudum:{request_id}"
+            )
+        ])
 
     if with_feedback:
         rows.append(

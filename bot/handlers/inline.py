@@ -8,7 +8,6 @@ from aiogram import Router
 from aiogram.types import InlineQuery, InlineQueryResultArticle, InputTextMessageContent
 
 import core
-from core.hudum import get_converter
 from core.translit_todo import SCRIPT_CYRILLIC, SCRIPT_TODO
 
 from .. import texts
@@ -56,14 +55,14 @@ def _inline_results(text: str) -> list[InlineQueryResultArticle]:
 
     if todo:
         try:
-            hudum = get_converter().convert(todo, "hudum")
-        except ValueError:
+            hudum = core.process(todo, core.TARGET_HUDUM).hudum
+        except core.PipelineError:
             return results
         except Exception:
             log.exception("не удалось записать inline-текст худум бичик")
             return results
         if hudum and len(hudum) <= MESSAGE_LIMIT:
-            results.append(_article("hudum", texts.HUDUM_RESULT["hudum"], hudum, hudum))
+            results.append(_article("hudum", texts.HUDUM_TITLE, hudum, hudum))
     return results
 
 

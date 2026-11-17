@@ -14,7 +14,7 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo
 
 from . import texts
@@ -117,7 +117,7 @@ async def main() -> None:
             parse_mode=ParseMode.HTML, link_preview_is_disabled=True
         ),
     )
-    dp = Dispatcher(storage=MemoryStorage())
+    dp = Dispatcher(storage=MemoryStorage(), events_isolation=SimpleEventIsolation())
     dp["storage"] = storage
     dp["config"] = config
     dp.include_router(build_router())

@@ -7,7 +7,7 @@ from core import Result
 
 from . import texts
 
-TARGET_ICONS = {"translit": "🔤", "todo": "ᡐ", "image": "🖼", "fix": "✏️"}
+TARGET_ICONS = {"translit": "🔤", "todo": "ᡐ", "hudum": "ᠬ", "image": "🖼", "fix": "✏️"}
 
 CAPTION_LIMIT = 1024
 MESSAGE_LIMIT = 4096
@@ -34,7 +34,7 @@ def _header(res: Result) -> str:
 
 
 def render_result(res: Result, show_time: bool = True) -> str:
-    """Текст ответа для режимов «транслитерация» и «тодо бичиг»."""
+    """Текст ответа для текстовых режимов."""
     blocks = [_header(res)]
 
     if res.target == "fix":
@@ -47,6 +47,8 @@ def render_result(res: Result, show_time: bool = True) -> str:
         blocks.append(f"{texts.LABEL_CYRILLIC}\n<code>{escape(res.cyrillic)}</code>")
     elif res.target == "translit":
         blocks.append(f"<code>{escape(res.translit or '')}</code>")
+    elif res.target == "hudum":
+        blocks.append(f"<code>{escape(res.text_output)}</code>")
     else:
         if res.translit:
             blocks.append(
