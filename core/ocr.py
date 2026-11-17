@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-ocr.py — распознавание тодо бичиг с фото: картинка -> столбцы -> текст.
+ocr.py — распознавание с фото: картинка -> столбцы -> текст.
+По умолчанию использует OCR тодо; для худум используется адаптер hudum_ocr.py.
 
   1. page_layout.split_page режет страницу на столбцы (выпрямляет наклон,
      выкидывает колонтитулы и пыль) — подробности в самом модуле.
@@ -206,7 +207,7 @@ class OcrUnavailable(OcrError):
 
 @dataclass
 class OcrResult:
-    columns: list                          # тодо бичиг, по строке на столбец
+    columns: list                          # распознанный Unicode, по строке на столбец
     translit_columns: list
     cyrillic_columns: list = field(default_factory=list)   # пусто — не получилось
     confidence: float = 1.0
@@ -216,10 +217,15 @@ class OcrResult:
     elapsed_ms: float = 0.0
     steps_ms: dict = field(default_factory=dict)
     unreadable: int = 0                    # столбцов с текстом, который не разобрать (размыт)
+    script: str = "todo"
 
     @property
     def todo(self) -> str:
-        return "\n".join(self.columns)
+        return "\n".join(self.columns) if self.script == "todo" else ""
+
+    @property
+    def hudum(self) -> str:
+        return "\n".join(self.columns) if self.script == "hudum" else ""
 
     @property
     def translit(self) -> str:
@@ -384,7 +390,7 @@ def trim_unsure(text: str, probs: list):
     return " ".join("".join(ch for ch, _ in w) for w in words), [p for w in words for _, p in w]
 
 
-def _junk_column(text: str, probs: list) -> bool:
+def _junk_column(text: str, probs: list, mean_threshold: float = JUNK_MEAN) -> bool:
     """Столбец, который не текст: на фото здания или улицы край стены, рама окна, перила тоже дают
     «столбцы». Модель читает их как 0–2 знака: «—», «:::m», «no,» — и если букв две, то неуверенно.
     Настоящее короткое слово из двух букв она видит уверенно, его не трогаем."""
@@ -395,7 +401,7 @@ def _junk_column(text: str, probs: list) -> bool:
     # пустое место с просвечивающим текстом обратной стороны, номер страницы, а ещё столбцы у корешка
     # не в фокусе. Модель читает их как «rooml muǰγoǰozoolrz», «ooa zen eno yer»; повысить резкость
     # или контраст не помогает. Настоящие столбцы, даже бледные, — от 0.85 в среднем.
-    return float(np.mean(p)) < JUNK_MEAN and float(np.mean(np.array(p) < UNSURE_WORD)) >= JUNK_UNSURE_SHARE
+    return float(np.mean(p)) < mean_threshold and float(np.mean(np.array(p) < UNSURE_WORD)) >= JUNK_UNSURE_SHARE
 
 
 def _unreadable_boxes(todo: list, boxes: list, keep: list) -> list:
@@ -446,7 +452,7 @@ def _margin_columns(boxes: list) -> list:
     return [b[3] - b[1] < 2 * w and (b[1] >= bottom or b[3] <= top) for b in boxes]
 
 
-def _read_page(page, split_page, model, trim=False):
+def _read_page(page, split_page, model, trim=False, *, clean=tidy, junk_mean=JUNK_MEAN):
     """Картинка -> (столбцы тодо, уверенность, число букв, отладка разметки) или None, если столбцов нет.
     trim — надпись на предмете: неуверенные слова по краям и неуверенные столбцы убираются.
     В отладке «unread» — рамки размытых столбцов, которые пришлось выкинуть (см. _unreadable_boxes)."""
@@ -454,7 +460,7 @@ def _read_page(page, split_page, model, trim=False):
     if not cols:
         return None
     todo, confidence, probs = model.read(cols, char_probs=True)
-    keep = [not _junk_column(t, p) for t, p in zip(todo, probs)]
+    keep = [not _junk_column(t, p, junk_mean) for t, p in zip(todo, probs)]
     dbg["unread"] = [] if trim else _unreadable_boxes(todo, dbg["boxes"], keep)
     keep = [k and not m for k, m in zip(keep, _margin_columns(dbg["boxes"]))]
     if not trim:
@@ -471,7 +477,7 @@ def _read_page(page, split_page, model, trim=False):
         todo, dbg["boxes"] = [t for t, _, _ in kept], [box for _, _, box in kept]
         left = [q for _, p, _ in kept for q in p]                  # уверенность — по тому, что осталось
         confidence = float(np.mean(left)) if left else 0.0
-    todo = [tidy(c) for c in todo]
+    todo = [clean(c) for c in todo]
     if not all(todo):                                             # от столбца ничего не осталось — и строки нет
         dbg["boxes"] = [b for t, b in zip(todo, dbg["boxes"]) if t]
         todo = [t for t in todo if t]
@@ -594,23 +600,37 @@ def draw_columns(page: Image.Image, boxes: list, unread: list = ()):
 
 # --------------------------------------------------------------- основное
 
-def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNCT) -> OcrResult:
+def recognize(
+    data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNCT, *, script: str = "todo"
+) -> OcrResult:
     """Байты картинки -> OcrResult. Синхронно и не быстро (~1 с на страницу).
 
     punctuation — знаки препинания в ответе (PUNCT_* из punctuation.py): по
-    умолчанию убираются и те, что модель прочитала на странице."""
+    умолчанию убираются и те, что модель прочитала на странице тодо.
+    Для худум сохраняется Unicode, распознанный моделью."""
     started = time.perf_counter()
     steps = {}
     # OcrUnavailable — до того, как тратить время на картинку
     split_page = _split_page()
-    model = get_model()
+    if script == "hudum":
+        from .hudum_ocr import get_model as get_hudum_model
+
+        model = get_hudum_model()
+        # The Todo cutoff drops a legible printed column in the Hudum sample.
+        read_page = functools.partial(_read_page, clean=lambda text: text.strip(" "), junk_mean=0.75)
+    elif script == "todo":
+        model = get_model()
+        read_page = _read_page
+    else:
+        raise ValueError(f"Неизвестное письмо OCR: {script}")
+    script_name = "худум бичик" if script == "hudum" else "тодо бичик"
 
     t0 = time.perf_counter()
     img = open_image(data)
     steps["картинка"] = (time.perf_counter() - t0) * 1000
 
     t0 = time.perf_counter()
-    best = _read_page(img, split_page, model)
+    best = read_page(img, split_page, model)
     plate_box = None
     steps["разметка и модель"] = (time.perf_counter() - t0) * 1000
     poor = best is None or best[2] < FEW_LETTERS or best[1] < LOW_CONFIDENCE
@@ -623,7 +643,7 @@ def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNC
         upright = img
         for rot in ((180, 90, 270) if poor else (180,)):
             turned = upright.rotate(rot, expand=True)
-            r = _read_page(turned, split_page, model)
+            r = read_page(turned, split_page, model)
             if _better_turn(r, best):
                 best, img = r, turned
         steps["поворот"] = (time.perf_counter() - t0) * 1000
@@ -632,7 +652,7 @@ def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNC
         # бинаризация по местному контрасту вместо одной полярности на весь кадр.
         t0 = time.perf_counter()
         # Плакат пёстрый (рамки, фото, кириллица), как надпись на предмете: неуверенное по краям столбцов срезаем.
-        r = _read_page(img, functools.partial(split_page, local=True), model, trim=True)
+        r = read_page(img, functools.partial(split_page, local=True), model, trim=True)
         if _better_turn(r, best):
             best = r
         steps["местный контраст"] = (time.perf_counter() - t0) * 1000
@@ -642,7 +662,7 @@ def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNC
         t0 = time.perf_counter()
         from .page_layout import find_plates
         for plate, box in find_plates(img):
-            r = _read_page(plate, split_page, model, trim=True)
+            r = read_page(plate, split_page, model, trim=True)
             if r is not None and r[2] < PLATE_MIN_LETTERS:
                 continue
             if _rank(r) > _rank(best):
@@ -651,30 +671,30 @@ def recognize(data: bytes, overlay: bool = True, punctuation: str = DEFAULT_PUNC
     if best is None:
         raise OcrError(
             "Не нашёл на картинке вертикального текста. Пришлите фото, где "
-            "столбцы тодо бичик идут сверху вниз."
+            f"столбцы {script_name} идут сверху вниз."
         )
     todo, confidence, letters, dbg = best
     if letters < MIN_LETTERS:
         raise OcrError(
-            "Не разобрал на картинке тодо бичик. Нужно фото, где столбцы идут "
+            f"Не разобрал на картинке {script_name}. Нужно фото, где столбцы идут "
             "сверху вниз, а буквы крупные и чёткие."
         )
 
-    todo = drop_leading_birga(todo)
-    t0 = time.perf_counter()
-    # Страница размечена целиком — столбцы идут одним текстом: бирга перед
-    # первым, четыре точки после последнего. Число строк не меняется, иначе
-    # сбилась бы нумерация рамок.
-    todo = apply_punctuation(normalize_ocr("\n".join(todo)), punctuation).split("\n")
-    translit = [to_translit(t) for t in todo]
-    steps["транслитерация"] = (time.perf_counter() - t0) * 1000
+    translit, cyrillic = [], []
+    if script == "todo":
+        todo = drop_leading_birga(todo)
+        t0 = time.perf_counter()
+        # Число строк сохраняем для нумерации рамок.
+        todo = apply_punctuation(normalize_ocr("\n".join(todo)), punctuation).split("\n")
+        translit = [to_translit(t) for t in todo]
+        steps["транслитерация"] = (time.perf_counter() - t0) * 1000
 
-    t0 = time.perf_counter()
-    cyrillic = to_cyrillic_columns(translit)
-    steps["кириллица"] = (time.perf_counter() - t0) * 1000
+        t0 = time.perf_counter()
+        cyrillic = to_cyrillic_columns(translit)
+        steps["кириллица"] = (time.perf_counter() - t0) * 1000
 
     res = OcrResult(columns=todo, translit_columns=translit, cyrillic_columns=cyrillic,
-                    confidence=confidence, angle=dbg["angle"], steps_ms=steps,
+                    confidence=confidence, angle=dbg["angle"], steps_ms=steps, script=script,
                     unreadable=0 if plate_box is not None else len(dbg.get("unread", [])))
     if overlay:
         t0 = time.perf_counter()

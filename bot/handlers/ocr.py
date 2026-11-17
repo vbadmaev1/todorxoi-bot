@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Фото → текст: распознавание тодо бичиг (core/ocr.py).
+"""Фото → текст: распознавание тодо или худум бичик (core/ocr.py).
 
 Фото принимается в любом режиме: режимы касаются того, во что превращать
 текст, а картинку ни с чем не спутать. Команда /ocr — подсказка; с фото
@@ -31,7 +31,7 @@ from core import ocr as core_ocr
 from .. import formatting, keyboards, texts
 from ..config import Config
 from ..storage import Storage
-from .settings import load_punctuation, load_show_time
+from .settings import load_ocr_script, load_punctuation, load_show_time
 from .translate import _PHOTO_MAX_RATIO, _send_patiently
 
 log = logging.getLogger(__name__)
@@ -67,7 +67,9 @@ async def cmd_ocr(
     if picked:
         await read_image(message, *picked, storage=storage, config=config)
     else:
-        await message.answer(texts.OCR_HINT)
+        user = message.from_user
+        script = await load_ocr_script(storage, user.id) if user else "todo"
+        await message.answer(texts.OCR_HINT.format(script=texts.OCR_SCRIPT_LABELS[script]))
 
 
 @router.message(StateFilter(None), F.photo | F.document)
@@ -109,17 +111,18 @@ async def read_image(
     punctuation = (
         await load_punctuation(storage, user.id) if user else core_ocr.DEFAULT_PUNCT
     )
+    script = await load_ocr_script(storage, user.id) if user else "todo"
     await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     try:
         data = (await message.bot.download(file_id)).getvalue()
         async with _lock:
             res = await asyncio.to_thread(
-                core_ocr.recognize, data, config.ocr_overlay, punctuation
+                core_ocr.recognize, data, config.ocr_overlay, punctuation, script=script
             )
     except core_ocr.OcrUnavailable as exc:
         log.warning("распознавание фото недоступно: %s", exc)
         await storage.save_request(ok=False, error=f"ocr unavailable: {exc}", **base)
-        await message.answer(texts.OCR_UNAVAILABLE)
+        await message.answer(texts.OCR_HUDUM_UNAVAILABLE if script == "hudum" else texts.OCR_UNAVAILABLE)
         return
     except core_ocr.OcrError as exc:
         await storage.save_request(ok=False, error=str(exc), **base)
@@ -133,14 +136,15 @@ async def read_image(
 
     request_id = await storage.save_request(
         translit=res.translit,
-        todo=res.todo,
+        todo=res.todo or None,
+        hudum=res.hudum or None,
         cyrillic=res.cyrillic or None,
         elapsed_ms=res.elapsed_ms,
         steps=res.steps_ms,
         ok=True,
         **base,
     )
-    markup = keyboards.result_keyboard(request_id, TARGET_OCR)
+    markup = keyboards.result_keyboard(request_id, TARGET_OCR, with_hudum=script == "todo")
     show_time = await load_show_time(storage, user.id) if user else True
     await _answer(message, res, markup, show_time)
 

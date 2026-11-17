@@ -8,8 +8,8 @@
 фото) и время работы под ответом (по умолчанию показывается).
 
 Настройки у каждого пользователя свои и лежат в таблице user_settings,
-то есть переживают перезапуск бота (в отличие от режима, который живёт в
-памяти FSM). Настройки картинки на режимы /translit и /todo не влияют —
+то есть переживают перезапуск бота. Здесь же выбирается письмо для OCR.
+Настройки картинки на режимы /translit и /todo не влияют —
 там текст.
 
 Два поведения, ради которых всё и затевалось:
@@ -74,7 +74,12 @@ async def load_show_time(storage: Storage, user_id: int) -> bool:
     return (await storage.get_settings(user_id)).get("show_time") != "off"
 
 
-def _describe(opts: ImageOptions, fix_letters: bool, punct: str, show_time: bool) -> str:
+async def load_ocr_script(storage: Storage, user_id: int) -> str:
+    saved = (await storage.get_settings(user_id)).get("ocr_script")
+    return saved if saved in texts.OCR_SCRIPT_LABELS else "todo"
+
+
+def _describe(opts: ImageOptions, fix_letters: bool, punct: str, show_time: bool, ocr_script: str) -> str:
     return texts.SETTINGS.format(
         fg=color_label(opts.fg),
         bg=color_label(opts.bg),
@@ -83,6 +88,7 @@ def _describe(opts: ImageOptions, fix_letters: bool, punct: str, show_time: bool
         fix_letters=texts.FIX_LETTERS_ON if fix_letters else texts.FIX_LETTERS_OFF,
         punctuation=keyboards.PUNCT_LABELS.get(punct, punct),
         show_time=texts.SHOW_TIME_ON if show_time else texts.SHOW_TIME_OFF,
+        ocr_script=texts.OCR_SCRIPT_LABELS[ocr_script],
     )
 
 
@@ -93,22 +99,23 @@ async def cmd_settings(message: Message, storage: Storage) -> None:
     fix = await load_fix_letters(storage, user_id)
     punct = await load_punctuation(storage, user_id)
     show_time = await load_show_time(storage, user_id)
+    ocr_script = await load_ocr_script(storage, user_id)
     await message.answer(
-        _describe(opts, fix, punct, show_time),
-        reply_markup=keyboards.settings_menu(opts, fix, punct, show_time),
+        _describe(opts, fix, punct, show_time, ocr_script),
+        reply_markup=keyboards.settings_menu(opts, fix, punct, show_time, ocr_script),
     )
 
 
 async def _refresh(
     callback: CallbackQuery, opts: ImageOptions, fix: bool, punct: str,
-    show_time: bool, markup=None,
+    show_time: bool, ocr_script: str, markup=None,
 ) -> None:
     """Перерисовать экран настроек. Без markup — главное меню."""
     if markup is None:
-        markup = keyboards.settings_menu(opts, fix, punct, show_time)
+        markup = keyboards.settings_menu(opts, fix, punct, show_time, ocr_script)
     try:
         await callback.message.edit_text(
-            _describe(opts, fix, punct, show_time), reply_markup=markup
+            _describe(opts, fix, punct, show_time, ocr_script), reply_markup=markup
         )
     except TelegramBadRequest:
         # «message is not modified» — значит показывать уже нечего
@@ -125,7 +132,9 @@ async def on_settings(callback: CallbackQuery, storage: Storage) -> None:
     punct = await load_punctuation(storage, user_id)
     show_time = await load_show_time(storage, user_id)
 
-    if action == "pick":
+    ocr_script = await load_ocr_script(storage, user_id)
+
+    if action == "pick" and len(parts) == 3:
         field = parts[2]
         if field == "size":
             markup = keyboards.size_picker(opts.size)
@@ -133,17 +142,22 @@ async def on_settings(callback: CallbackQuery, storage: Storage) -> None:
             markup = keyboards.font_picker(opts.font)
         elif field == "punctuation":
             markup = keyboards.punct_picker(punct)
-        else:
+        elif field == "ocr_script":
+            markup = keyboards.ocr_script_picker(ocr_script)
+        elif field in ("fg", "bg"):
             markup = keyboards.color_picker(field, getattr(opts, field))
+        else:
+            await callback.answer()
+            return
         await callback.answer()
-        await _refresh(callback, opts, fix, punct, show_time, markup)
+        await _refresh(callback, opts, fix, punct, show_time, ocr_script, markup)
         return
 
     if action == "toggle" and parts[2:3] == ["fix_letters"]:
         fix = not fix
         await storage.set_setting(user_id, "fix_letters", "on" if fix else "off")
         await callback.answer(texts.SETTINGS_FIX_ON if fix else texts.SETTINGS_FIX_OFF)
-        await _refresh(callback, opts, fix, punct, show_time)
+        await _refresh(callback, opts, fix, punct, show_time, ocr_script)
         return
 
     if action == "toggle" and parts[2:3] == ["show_time"]:
@@ -152,38 +166,41 @@ async def on_settings(callback: CallbackQuery, storage: Storage) -> None:
         await callback.answer(
             texts.SETTINGS_TIME_ON if show_time else texts.SETTINGS_TIME_OFF
         )
-        await _refresh(callback, opts, fix, punct, show_time)
+        await _refresh(callback, opts, fix, punct, show_time, ocr_script)
         return
 
-    if action == "set":
+    if action == "set" and len(parts) == 4:
         field, value = parts[2], parts[3]
         ok = ((field in ("fg", "bg") and value in _VALID_COLORS)
               or (field == "size" and value in FONT_SIZES)
               or (field == "font" and value in FONTS)
-              or (field == "punctuation" and value in PUNCT_MODES))
+              or (field == "punctuation" and value in PUNCT_MODES)
+              or (field == "ocr_script" and value in texts.OCR_SCRIPT_LABELS))
         if not ok:
             await callback.answer()
             return
         await storage.set_setting(user_id, field, value)
         opts = await load_options(storage, user_id)
         punct = await load_punctuation(storage, user_id)
+        if field == "ocr_script":
+            ocr_script = value
         # предупреждаем сразу, а не когда человек получит чёрно-белую картинку
         if field in ("fg", "bg") and opts.fg == opts.bg:
             await callback.answer(texts.SETTINGS_SAME_COLOR, show_alert=True)
         else:
             await callback.answer(texts.SETTINGS_SAVED)
-        await _refresh(callback, opts, fix, punct, show_time)
+        await _refresh(callback, opts, fix, punct, show_time, ocr_script)
         return
 
     if action == "back":
         await callback.answer()
-        await _refresh(callback, opts, fix, punct, show_time)
+        await _refresh(callback, opts, fix, punct, show_time, ocr_script)
         return
 
     if action == "reset":
         await storage.reset_settings(user_id)
         await callback.answer(texts.SETTINGS_RESET)
-        await _refresh(callback, ImageOptions(), False, DEFAULT_PUNCT, True)
+        await _refresh(callback, ImageOptions(), False, DEFAULT_PUNCT, True, "todo")
         return
 
     await callback.answer()

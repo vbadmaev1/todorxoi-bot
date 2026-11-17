@@ -1083,6 +1083,34 @@ async def _check_ocr(dp, bot, session, storage):
     _, m = session.last("SendMessage")
     check("Фото → текст" in m.text, "/ocr без фото объясняет, что прислать")
 
+    check("Сейчас распознаю <b>Тодо бичик</b>" in m.text, "обычное фото по умолчанию идёт в OCR тодо")
+
+    from unittest.mock import patch
+
+    await dp.feed_update(bot, cb("set:pick:ocr_script"))
+    _, menu = session.last("EditMessageText")
+    buttons = {btn.callback_data: btn.text for row in menu.reply_markup.inline_keyboard for btn in row}
+    check(buttons.get("set:set:ocr_script:todo") == "Тодо бичик ✓"
+          and buttons.get("set:set:ocr_script:hudum") == "Худум бичик", "в /settings можно выбрать письмо на фото")
+    await dp.feed_update(bot, cb("set:set:ocr_script:hudum"))
+    await dp.feed_update(bot, msg("/ocr"))
+    _, m = session.last("SendMessage")
+    check("Сейчас распознаю <b>Худум бичик</b>" in m.text, "/ocr показывает выбранный худум")
+
+    mock_result = ocr.OcrResult(columns=["ᠮᠣᠩᠭᠣᠯ"], translit_columns=[], script="hudum")
+    with patch("core.ocr.recognize", return_value=mock_result) as recognize:
+        await dp.feed_update(bot, Update(update_id=_next_id(), message=photo_message("ph1", png)))
+    _, m = session.last("SendMessage")
+    row = await storage.get_request(max_request_id(storage))
+    check(recognize.call_args.kwargs.get("script") == "hudum"
+          and "Худум бичик:" in m.text and "ᠮᠣᠩᠭᠣᠯ" in m.text
+          and row["hudum"] == "ᠮᠣᠩᠭᠣᠯ" and row["todo"] is None,
+          "обычное фото отправляется в худум OCR и ответ сохраняется как худум")
+    await dp.feed_update(bot, cb("set:reset:-"))
+    await dp.feed_update(bot, msg("/ocr"))
+    _, m = session.last("SendMessage")
+    check("Сейчас распознаю <b>Тодо бичик</b>" in m.text, "сброс настроек возвращает OCR тодо")
+
     await dp.feed_update(bot, doc_msg("d1", "book.pdf", "application/pdf"))
     _, m = session.last("SendMessage")
     check("PDF" in m.text, "PDF — понятный отказ")

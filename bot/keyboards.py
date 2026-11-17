@@ -48,7 +48,7 @@ def main_menu() -> ReplyKeyboardMarkup:
     )
 
 
-def result_keyboard(request_id: int, target: str, with_feedback: bool = True):
+def result_keyboard(request_id: int, target: str, with_feedback: bool = True, *, with_hudum: bool = True):
     """Кнопки под результатом: продолжить конвертацию + оценка."""
     rows = []
 
@@ -80,7 +80,7 @@ def result_keyboard(request_id: int, target: str, with_feedback: bool = True):
     if convert:
         rows.append(convert)
 
-    if target in ("translit", "todo", "image", "fix", "ocr"):
+    if with_hudum and target in ("translit", "todo", "image", "fix", "ocr"):
         rows.append([
             InlineKeyboardButton(
                 text=texts.BTN_TO_HUDUM, callback_data=f"{CB_CONVERT}:hudum:{request_id}"
@@ -105,7 +105,8 @@ def result_keyboard(request_id: int, target: str, with_feedback: bool = True):
 
 
 def settings_menu(
-    opts, fix_letters: bool = False, punctuation: str = "off", show_time: bool = True
+    opts, fix_letters: bool = False, punctuation: str = "off", show_time: bool = True,
+    ocr_script: str = "todo",
 ) -> InlineKeyboardMarkup:
     """Главный экран /settings: что менять."""
     return InlineKeyboardMarkup(
@@ -160,6 +161,12 @@ def settings_menu(
                         value=texts.SHOW_TIME_ON if show_time else texts.SHOW_TIME_OFF
                     ),
                     callback_data=f"{CB_SETTINGS}:toggle:show_time",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=texts.SET_BTN_OCR.format(value=texts.OCR_SCRIPT_LABELS[ocr_script]),
+                    callback_data=f"{CB_SETTINGS}:pick:ocr_script",
                 )
             ],
             [
@@ -225,14 +232,22 @@ def font_picker(current: str) -> InlineKeyboardMarkup:
 
 def punct_picker(current: str) -> InlineKeyboardMarkup:
     """Три режима знаков препинания — каждый своей строкой: подписи длинные."""
+    return _picker("punctuation", texts.PUNCT_LABELS, current)
+
+
+def ocr_script_picker(current: str) -> InlineKeyboardMarkup:
+    return _picker("ocr_script", texts.OCR_SCRIPT_LABELS, current)
+
+
+def _picker(field: str, labels: dict, current: str) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
                 text=label + (" ✓" if key == current else ""),
-                callback_data=f"{CB_SETTINGS}:set:punctuation:{key}",
+                callback_data=f"{CB_SETTINGS}:set:{field}:{key}",
             )
         ]
-        for key, label in PUNCT_LABELS.items()
+        for key, label in labels.items()
     ]
     rows.append(
         [InlineKeyboardButton(text=texts.BTN_BACK, callback_data=f"{CB_SETTINGS}:back:-")]

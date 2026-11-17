@@ -166,7 +166,7 @@ def columns_word(n: int) -> str:
 
 
 def render_ocr(res, show_time: bool = True) -> list:
-    """Ответ на фото: кириллица, транслитерация и тодо бичиг, по строке на столбец.
+    """Ответ на фото с текстом по столбцам и доступными представлениями.
 
     Полная страница — это около 2000 символов на обе записи, почти всегда
     одно сообщение. Если не влезает в лимит Telegram, режем по столбцам:
@@ -175,8 +175,10 @@ def render_ocr(res, show_time: bool = True) -> list:
     blocks = [texts.OCR_TITLE.format(n=len(res.columns))]
     if res.cyrillic_columns:
         blocks += _code_blocks(texts.LABEL_CYRILLIC, res.cyrillic_columns)
-    blocks += _code_blocks(texts.LABEL_TRANSLIT, res.translit_columns)
-    blocks += _code_blocks(texts.LABEL_TODO, res.columns)
+    if res.translit_columns:
+        blocks += _code_blocks(texts.LABEL_TRANSLIT, res.translit_columns)
+    label = texts.LABEL_HUDUM if res.script == "hudum" else texts.LABEL_TODO
+    blocks += _code_blocks(label, res.columns)
     if res.unreadable:
         blocks.append(
             texts.OCR_UNREADABLE.format(cols=columns_word(res.unreadable))
@@ -184,7 +186,7 @@ def render_ocr(res, show_time: bool = True) -> list:
             + texts.OCR_UNREADABLE_HINT
         )
     if res.low_confidence:
-        blocks.append(texts.OCR_LOW_CONFIDENCE)
+        blocks.append(texts.OCR_LOW_CONFIDENCE.format(script=texts.OCR_SCRIPT_LABELS[res.script].lower()))
     if show_time:
         blocks.append(f"⏱ {fmt_ms(res.elapsed_ms)}")
     return _pack(blocks, MESSAGE_LIMIT)
